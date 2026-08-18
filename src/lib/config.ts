@@ -19,11 +19,10 @@
  */
 
 /** Deployed backend. This is the default. */
-const PROD_BASE = 'http://localhost:5000/'
+const PROD_BASE = 'https://financegpt-backend-phm6.onrender.com/'
 
 /** Development backend. Point this wherever you test; it is not used unless ENV is 'dev'. */
-const DEV_BASE = 'http://localhost:5000/'
-// const DEV_BASE = 'http://localhost:5000/'
+const DEV_BASE = 'https://financegpt-backend-phm6.onrender.com/'
 
 /**
  * Which base to use. **Edit this line to switch.**
