@@ -1,0 +1,68 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  background: #0f1720;
+  color: #e8edf2;
+  -webkit-font-smoothing: antialiased;
+  /* No sideways scroll on a phone, whatever a panel tries to do. */
+  overflow-x: hidden;
+}
+
+/* 16px minimum, or iOS Safari zooms the whole page when a field is focused. */
+input,
+select,
+textarea,
+button {
+  font-family: inherit;
+  font-size: 16px;
+}
+
+:focus-visible {
+  outline: 2px solid #8f6bea;
+  outline-offset: 2px;
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 font-semibold transition-colors disabled:opacity-50;
+    min-height: 44px; /* A comfortable thumb target. */
+  }
+  .btn-primary {
+    @apply btn bg-brand-500 text-white hover:bg-brand-600;
+  }
+  .btn-ghost {
+    @apply btn bg-white/10 text-white hover:bg-white/20;
+  }
+  .field {
+    @apply w-full rounded-xl border border-white/15 bg-white/[0.06] px-3 py-2.5 text-white placeholder:text-white/35 focus:border-brand-400 focus:outline-none;
+  }
+  .card {
+    @apply rounded-2xl border border-white/10 bg-white/[0.04] p-4;
+  }
+}
