@@ -19,6 +19,27 @@
  *
  *   · `@zxing/browser` 0.2 has no `reset()`; it returns controls with `stop()`. Calling
  *     `reset?.()` optionally does nothing at all and leaves the decoder running.
+ *
+ * ── Confirm mode ─────────────────────────────────────────────────────────────
+ * A decoder reads a barcode *every frame it can see one* — thirty times a second. Firing the
+ * handler on each read is the obvious implementation and it is wrong: sweeping a camera past a
+ * shelf adds the same item a dozen times, and the operator's only clue is a quantity that has
+ * silently run away from what is in the basket. A time-based repeat guard helps but cannot fix
+ * it, because there is no interval that both stops runaway counting and still lets somebody
+ * deliberately scan the same tin twice.
+ *
+ * So `confirm` inverts who decides. The decoder *arms* — it holds the code it read and stops —
+ * and the code is handed over only when `capture()` is called, from a button the operator
+ * presses. Reading and recording become two separate acts, which is what they always were.
+ *
+ * Two states, and the interface is expected to make them visible:
+ *
+ *   · **seeking** — nothing readable in frame. `candidate` is ''.
+ *   · **armed** — a barcode has been read and is waiting. `candidate` is that code.
+ *
+ * `capture()` and `discard()` both stamp the repeat guard, so the indicator visibly returns to
+ * seeking rather than re-arming in the same frame off a barcode that is still in view — which
+ * would make both buttons look as though they had done nothing.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -30,7 +51,13 @@ const FORMATS = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'it
 /** Consecutive native failures that mean the native decoder will not work here. */
 const NATIVE_FAILURE_LIMIT = 15
 
-/** One scan per barcode per this long, or a code held still fires every frame. */
+/**
+ * One scan per barcode per this long.
+ *
+ * In free-running mode this is the only thing stopping a code held still from firing every
+ * frame. In confirm mode it is a cooldown after a capture, so the indicator returns to red for
+ * long enough to be seen before the same barcode can arm again.
+ */
 const REPEAT_GUARD_MS = 1200
 
 interface NativeDetector {
@@ -106,16 +133,34 @@ export interface ScannerState {
   cameraId: string
   chooseCamera: (id: string) => void
   toggleTorch: () => void
+  /**
+   * In confirm mode: the barcode that has been read and is waiting for `capture()`, or '' when
+   * nothing is readable. Always '' when confirm mode is off.
+   */
+  candidate: string
+  /** True while the camera is live, nothing has gone wrong, and no code is held. */
+  seeking: boolean
+  /** Hands the held code to `onCode`. Does nothing when nothing is held. */
+  capture: () => void
+  /** Throws the held code away — the operator was pointed at the wrong thing. */
+  discard: () => void
 }
 
 /**
- * Runs the camera while `active`, calling `onCode` for each barcode read.
+ * Runs the camera while `active`.
  *
- * `onCode` is held in a ref rather than closed over, because the decode loop is created
- * once and would otherwise keep calling the version of the handler that existed when
- * the camera opened — along with whatever state it had captured.
+ * With `confirm` off, `onCode` is called for each barcode read. With it on, reads *arm* instead
+ * and `onCode` is called from `capture()` — see the note at the top of this file.
+ *
+ * `onCode` is held in a ref rather than closed over, because the decode loop is created once and
+ * would otherwise keep calling the version of the handler that existed when the camera opened —
+ * along with whatever state it had captured.
  */
-export function useScanner(active: boolean, onCode: (code: string) => void): ScannerState {
+export function useScanner(
+  active: boolean,
+  onCode: (code: string) => void,
+  confirm = false,
+): ScannerState {
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const rafRef = useRef<number | null>(null)
@@ -127,6 +172,16 @@ export function useScanner(active: boolean, onCode: (code: string) => void): Sca
   useEffect(() => {
     onCodeRef.current = onCode
   }, [onCode])
+
+  /* Both in refs as well as state: the decode loop is created once and reads them from a stale
+     closure otherwise, and `accept` must see the *current* candidate to know to stay quiet. */
+  const confirmRef = useRef(confirm)
+  useEffect(() => {
+    confirmRef.current = confirm
+  }, [confirm])
+
+  const candidateRef = useRef('')
+  const [candidate, setCandidate] = useState('')
 
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState('')
@@ -141,9 +196,44 @@ export function useScanner(active: boolean, onCode: (code: string) => void): Sca
     if (!code) return
     const now = Date.now()
     if (lastHitRef.current.code === code && now - lastHitRef.current.at < REPEAT_GUARD_MS) return
+
+    if (confirmRef.current) {
+      /*
+       * Already holding something: stay quiet.
+       *
+       * Not "replace it with the newer read" — the operator is reaching for the button, and the
+       * slightest drift of the phone would otherwise swap what they are about to record for
+       * whatever else is on the shelf. Pointing at the wrong item is what `discard` is for.
+       */
+      if (candidateRef.current) return
+      lastHitRef.current = { code, at: now }
+      candidateRef.current = code
+      setCandidate(code)
+      return
+    }
+
     lastHitRef.current = { code, at: now }
     onCodeRef.current(code)
   }, [])
+
+  /** Clears the held code and suppresses it briefly, so the indicator visibly resets. */
+  const release = useCallback((): string => {
+    const code = candidateRef.current
+    if (!code) return ''
+    candidateRef.current = ''
+    setCandidate('')
+    lastHitRef.current = { code, at: Date.now() }
+    return code
+  }, [])
+
+  const capture = useCallback(() => {
+    const code = release()
+    if (code) onCodeRef.current(code)
+  }, [release])
+
+  const discard = useCallback(() => {
+    release()
+  }, [release])
 
   const stop = useCallback(() => {
     liveRef.current = false
@@ -155,6 +245,10 @@ export function useScanner(active: boolean, onCode: (code: string) => void): Sca
     streamRef.current?.getTracks().forEach((track) => track.stop())
     streamRef.current = null
     setTorchOn(false)
+    /* A held code belongs to a live camera. Keeping it across a stop would offer the operator a
+       Capture button for something the closed camera saw a minute ago. */
+    candidateRef.current = ''
+    setCandidate('')
   }, [])
 
   useEffect(() => {
@@ -335,5 +429,9 @@ export function useScanner(active: boolean, onCode: (code: string) => void): Sca
     cameraId,
     chooseCamera,
     toggleTorch,
+    candidate,
+    seeking: active && !error && !starting && !candidate,
+    capture,
+    discard,
   }
 }

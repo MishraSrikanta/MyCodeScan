@@ -23,6 +23,7 @@ const PROD_BASE = 'https://financegpt-backend-phm6.onrender.com/'
 
 /** Development backend. Point this wherever you test; it is not used unless ENV is 'dev'. */
 const DEV_BASE = 'https://financegpt-backend-phm6.onrender.com/'
+// const DEV_BASE = 'http://localhost:5000/'
 
 /**
  * Which base to use. **Edit this line to switch.**

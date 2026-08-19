@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "api": "node server-reference/server.mjs",
     "test:api": "node server-reference/contract.test.mjs",
-    "test": "npm run test:api && npm run test:queue",
+    "test": "npm run test:api && npm run test:queue && npm run test:sub",
+    "test:sub": "esbuild src/lib/subbarcode.test.mts --bundle --format=esm --platform=node --outfile=.test-build/subbarcode.mjs --log-level=error && node .test-build/subbarcode.mjs",
     "test:queue": "esbuild src/lib/queue.test.mts --bundle --format=esm --platform=node --outfile=.test-build/queue.mjs --log-level=error --define:import.meta.env={\\\"VITE_API_ENV\\\":\\\"dev\\\",\\\"DEV\\\":true} && node server-reference/pin-base.mjs .test-build/queue.mjs http://127.0.0.1:8797/ && node .test-build/queue.mjs"
   },
   "dependencies": {

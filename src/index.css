@@ -48,6 +48,49 @@ button {
   display: none;
 }
 
+/* ─────────────────────────────────────────────────────────────────── printing ──
+ * Only the label sheet reaches paper.
+ *
+ * `SubLabelSheet` is a real screen on a white background rather than a hidden block revealed
+ * at print time, so there is very little to do here: hide the controls around the sheet, drop
+ * the app's own margins, and stop a label being split across a page break.
+ *
+ * `print-color-adjust` is the one non-obvious rule. Browsers "helpfully" lighten backgrounds
+ * when printing to save ink, and a barcode whose bars have been lightened to grey does not
+ * scan. This forbids that for the sheet.
+ */
+@media print {
+  html,
+  body,
+  #root {
+    height: auto;
+    background: #fff;
+    color: #000;
+    overflow: visible;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-sheet {
+    padding: 0 !important;
+    gap: 2mm !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  /* A sheet that overflows the page breaks between labels, never through one. */
+  .print-label {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  @page {
+    margin: 8mm;
+  }
+}
+
 @layer components {
   .btn {
     @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 font-semibold transition-colors disabled:opacity-50;

@@ -1,18 +1,28 @@
 /**
- * The shell: decide whether we are signed in, then show one of three screens.
+ * The shell: decide whether we are signed in, then show one of four screens.
  *
- * No router. There are exactly three states and one of them is modal on the others, so
- * a routing library would be more moving parts than the whole app has screens. The
- * browser back button is handled explicitly for the one navigation that matters —
- * leaving a scan — because on a phone that is the button people actually use.
+ * No router. There are a handful of states and the ones that matter are modal on the
+ * others, so a routing library would be more moving parts than the whole app has screens.
+ * The browser back button is handled explicitly for the two navigations that matter —
+ * leaving a scan, and leaving the sub-barcode section — because on a phone that is the
+ * button people actually use.
  */
 
 import { Loader2 } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { LoginScreen } from './components/LoginScreen'
 import { ScanView } from './components/ScanView'
 import { SessionList } from './components/SessionList'
-import { type User, logout, me, setSessionLostHandler, tokenLooksValid, tokens } from './lib/api'
+import { SubBarcodeView } from './components/SubBarcodeView'
+import {
+  type User,
+  deleteScan,
+  logout,
+  me,
+  setSessionLostHandler,
+  tokenLooksValid,
+  tokens,
+} from './lib/api'
 
 type Phase = 'checking' | 'signed-out' | 'signed-in'
 
@@ -46,12 +56,14 @@ export function App() {
   const [phase, setPhase] = useState<Phase>('checking')
   const [user, setUser] = useState<User | null>(null)
   const [openScanId, setOpenScanId] = useState<string | null>(null)
+  const [subBarcodes, setSubBarcodes] = useState(false)
 
   /* One place decides that the session is over, wherever the 401 came from. */
   useEffect(() => {
     setSessionLostHandler(() => {
       setUser(null)
       setOpenScanId(null)
+      setSubBarcodes(false)
       setPhase('signed-out')
     })
   }, [])
@@ -105,22 +117,67 @@ export function App() {
     }
   }, [])
 
-  const closeScan = useCallback(() => setOpenScanId(null), [])
+  /*
+   * ── Empty scans are not kept ────────────────────────────────────────────────
+   * A session is created on the server the moment "Start a new scan" is tapped, and it has to be:
+   * the operator taps it at the counter and then walks into the back room, where the signal dies.
+   * Deferring creation until the first barcode would put that request in exactly the dead spot the
+   * offline queue exists to survive, and the first scan of a session is the one most likely to be
+   * lost. So the session is created early — and a session nobody ever put anything into is deleted
+   * on the way out instead.
+   *
+   * It lives here rather than in ScanView because there are two ways out — the on-screen arrow and
+   * the phone's own back button — and only one of them passes through a React handler. Both end up
+   * in the `popstate` listener below, so this is the single place that closes a scan.
+   *
+   * ScanView reports its emptiness into this ref. A ref rather than state because nothing renders
+   * from it, and because the value is read inside an event listener that must not be re-registered
+   * on every keystroke in the label field.
+   */
+  const scanIsEmpty = useRef(false)
+
+  /* Stable identity: ScanView reports through an effect, and a fresh function on every App
+     render would re-run that effect on every keystroke in the scan's label field. */
+  const noteScanEmpty = useCallback((emptyNow: boolean) => {
+    scanIsEmpty.current = emptyNow
+  }, [])
+
+  const closeScan = useCallback(async (scanId: string) => {
+    if (scanIsEmpty.current) {
+      try {
+        await deleteScan(scanId)
+      } catch {
+        /* Offline, or already gone. Nothing useful to do, and nothing is lost — the scan was
+           empty. The server prunes abandoned sessions anyway. */
+      }
+    }
+    scanIsEmpty.current = false
+    setOpenScanId(null)
+  }, [])
 
   /*
-   * The hardware back button closes an open scan rather than leaving the app.
+   * The hardware back button closes whatever is open rather than leaving the app.
    *
-   * A history entry is pushed when a scan opens so there is something to pop. Without
+   * A history entry is pushed when a screen opens so there is something to pop. Without
    * this, back would exit to whatever page preceded the app — losing the operator's
    * place mid-shelf, which on a phone is the difference between usable and infuriating.
+   *
+   * One effect for both screens, keyed on which is open: only ever one of them is, and two
+   * effects racing to push and pop the same history entry is a bug waiting for the day
+   * somebody makes them coexist.
    */
+  const openScreen = openScanId ? `scan:${openScanId}` : subBarcodes ? 'sub' : ''
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (!openScanId) return
-    window.history.pushState({ scan: openScanId }, '')
-    const onPop = () => closeScan()
+    if (!openScreen) return
+    window.history.pushState({ screen: openScreen }, '')
+    const onPop = () => {
+      if (openScanId) void closeScan(openScanId)
+      setSubBarcodes(false)
+    }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
-  }, [openScanId, closeScan])
+  }, [openScreen])
 
   const signOut = () => {
     void logout()
@@ -131,6 +188,7 @@ export function App() {
     }
     setUser(null)
     setOpenScanId(null)
+    setSubBarcodes(false)
     setPhase('signed-out')
   }
 
@@ -154,19 +212,39 @@ export function App() {
     )
   }
 
+  /*
+   * Pops the entry pushed when the screen opened, so back does not have to be pressed twice.
+   *
+   * Note what this means for closing a scan: the common path is `history.back()`, which fires the
+   * `popstate` listener above — so the on-screen arrow and the phone's own back button both end up
+   * in the same handler, and the empty-scan cleanup only has to exist in one place. The fallback is
+   * for the case where the history entry has already been consumed.
+   */
+  const leave = (fallback: () => void) => {
+    if (window.history.state?.screen === openScreen) window.history.back()
+    else fallback()
+  }
+
   if (openScanId) {
     return (
       <ScanView
         scanId={openScanId}
-        onBack={() => {
-          /* Pop the entry pushed when the scan opened, so back does not have to be
-             pressed twice. */
-          if (window.history.state?.scan === openScanId) window.history.back()
-          else closeScan()
-        }}
+        onEmptyChange={noteScanEmpty}
+        onBack={() => leave(() => void closeScan(openScanId))}
       />
     )
   }
 
-  return <SessionList user={user} onOpen={setOpenScanId} onSignOut={signOut} />
+  if (subBarcodes) {
+    return <SubBarcodeView onBack={() => leave(() => setSubBarcodes(false))} />
+  }
+
+  return (
+    <SessionList
+      user={user}
+      onOpen={setOpenScanId}
+      onSubBarcodes={() => setSubBarcodes(true)}
+      onSignOut={signOut}
+    />
+  )
 }

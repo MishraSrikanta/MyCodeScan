@@ -176,35 +176,57 @@ async function parse(response: Response): Promise<unknown> {
 /**
  * Turns a failure body into an error the interface can show.
  *
- * Tolerant of several shapes because the backend uses a flat `{ message }` while the
- * documented scan surface uses `{ error: { code, message } }`. Reading only the latter is
- * what produced "The server returned 400" and hid the server actually saying
- * "userId and password are required" — a message that names the problem exactly.
+ * Tolerant of several shapes because there are two surfaces: the auth routes answer with a
+ * flat `{ message }` while validation failures are *nested* as
+ * `{ error: { code, message, details } }`. Reading only one of them is how a real sentence
+ * becomes "[object Object]" on screen — an object reached `new Error()` and was stringified.
  *
- * Order matters: the nested form is checked first because it carries a machine-readable
- * code, then the flat forms, then a last-resort mention of the status.
+ * Field-level `details` are appended when present, because on a signup that failed on three
+ * fields, naming them is the difference between a usable message and a shrug.
  */
 function toError(body: unknown, status: number): ApiError {
+  const fallback = `The server returned ${status}.`
+
   if (typeof body === 'string' && body.trim()) {
     return new ApiError(body.trim(), 'SERVER_ERROR', status)
   }
-
-  const shape = (body ?? {}) as {
-    error?: { code?: string; message?: string } | string
-    message?: string
-    errors?: Record<string, string> | string[]
+  if (!body || typeof body !== 'object') {
+    return new ApiError(fallback, 'SERVER_ERROR', status)
   }
 
-  const nested = typeof shape.error === 'object' ? shape.error : null
-  if (nested?.message) return new ApiError(nested.message, nested.code || 'SERVER_ERROR', status)
+  const shape = body as {
+    error?: { code?: string; message?: string; details?: unknown } | string
+    message?: string
+    errors?: unknown
+    detail?: string
+  }
 
-  const flat =
-    (typeof shape.error === 'string' ? shape.error : '') ||
-    shape.message ||
-    (Array.isArray(shape.errors) ? shape.errors.join('; ') : '') ||
-    (shape.errors && !Array.isArray(shape.errors) ? Object.values(shape.errors).join('; ') : '')
+  const nested = typeof shape.error === 'object' && shape.error !== null ? shape.error : null
 
-  return new ApiError(flat || `The server returned ${status}.`, 'SERVER_ERROR', status)
+  const summary =
+    nested?.message ??
+    (typeof shape.error === 'string' ? shape.error : undefined) ??
+    shape.message ??
+    shape.detail ??
+    ''
+
+  const fieldSource = nested?.details ?? shape.errors
+  const fields: string[] = []
+  if (Array.isArray(fieldSource)) {
+    for (const entry of fieldSource) if (entry) fields.push(String(entry))
+  } else if (fieldSource && typeof fieldSource === 'object') {
+    for (const [key, value] of Object.entries(fieldSource as Record<string, unknown>)) {
+      /* A validator may send undefined for the fields that passed. */
+      if (value === undefined || value === null || value === '') continue
+      fields.push(`${key}: ${String(value)}`)
+    }
+  }
+
+  const code = nested?.code || 'SERVER_ERROR'
+  if (summary && fields.length > 0) return new ApiError(`${summary} (${fields.join('; ')})`, code, status)
+  if (summary) return new ApiError(summary, code, status)
+  if (fields.length > 0) return new ApiError(fields.join('; '), code, status)
+  return new ApiError(fallback, code, status)
 }
 
 /**
@@ -363,7 +385,13 @@ export interface SignupInput {
   password: string
   phone?: string
   shopName?: string
-  developerCode?: string,
+  /**
+   * The invite key, sent so the **server** can gate registration.
+   *
+   * Checked in the browser too, but that is only a speed bump — the key ships in the bundle.
+   * Sending it is what lets the backend be the real gate.
+   */
+  developerCode?: string
   /** Defaults to DEFAULT_PLAN. The server computes the dates; it never accepts an expiry. */
   plan?: string
 }
@@ -386,6 +414,7 @@ export async function register(input: SignupInput): Promise<User> {
     ...(input.phone?.trim() ? { phone: input.phone.trim() } : {}),
     ...(input.shopName?.trim() ? { shopName: input.shopName.trim() } : {}),
     plan: input.plan ?? DEFAULT_PLAN,
+    ...(input.developerCode ? { developerCode: input.developerCode } : {}),
   })
 
   const token = tokenFrom(body)

@@ -9,6 +9,7 @@ nothing with the app beside it. Cut or copy the folder anywhere and it still bui
 ```
 mycodescan/
   API-CONTRACT.md        the backend agreement — read-only on purpose
+  SUBBARCODE-LOGIC.md    the sub-barcode format, for the MyStokio side
   server-reference/      a working backend, zero dependencies
   src/                   the phone app
 ```
@@ -55,6 +56,60 @@ and the reference server refuses that exact string.
 
 Three moving parts: this app, a backend, and MyStokio. The backend is the only one you
 still have to arrange.
+
+---
+
+## SubBarcode Printing
+
+A second, separate errand on the same app: **printing** a label for a weighed or cut portion
+of a product, rather than reading one. For the wire sold by the metre and the cashew sold by
+the kilo — where there is one product in MyStokio but what crosses the counter is a 5 kg bag.
+
+Scan the product's own barcode, type how much is in the bag, print. The label carries the
+parent barcode with the quantity added to it:
+
+```
+200002222  +  5 kg      →  200002222S5
+200002222  +  5.003 kg  →  200002222S5P003
+```
+
+**The parent barcode is copied verbatim.** Nothing is shortened, renumbered, hashed or looked
+up — the code just gets longer. Cut at the last `S` and you have the product back, which means
+a till that has never heard of this scheme still finds the right product with one string
+operation, offline, with no table.
+
+Scanning a label that already exists opens it for correction. Worth knowing what that can and
+cannot do: the quantity lives *inside* the barcode, so an edit produces a *different* barcode
+and the bag needs a new sticker. The app retires the old code and warns if it is ever scanned
+again, rather than letting somebody believe they corrected a bag that is still in the crate
+with the old number on it.
+
+Nothing in this section touches the server. It needs no scan session, no network and no
+backend — the label is self-describing, so there is nothing for a server to hold.
+
+### Custom piece, inside a scan
+
+The same suffix logic is available while scanning. Every line in a scan session has a **custom
+piece** button: tap it, say how much is in one piece, and the line's barcode becomes a
+sub-barcode — `200002222` becomes `200002222S12P75`. The till then reads the quantity out of the
+code instead of somebody typing it in at the counter.
+
+The line quantity keeps meaning **how many pieces**. Three 5 kg bags is `200002222S5` × 3, not
+`200002222` × 15 — pieces on the line, size in the code. Conflating those two numbers is the
+mistake the whole scheme exists to prevent, so they stay separate.
+
+Editing a piece replaces its suffix rather than adding a second one, and the new line is added
+to the session *before* the old one is removed: if a request fails halfway, the result is a
+visible duplicate that can be deleted, not a scanned item that has silently vanished.
+
+**`SUBBARCODE-LOGIC.md` is the format**, written for whoever implements the reading side in
+MyStokio. It includes the one rule that matters — look the whole code up as a product *first*,
+parse it as a sub-barcode only if nothing matches — and an EAN-13 fallback for tills whose
+scanners cannot read Code 128.
+
+```bash
+npm run test:sub   # 4,451 assertions over the format and both symbologies
+```
 
 ---
 
@@ -162,8 +217,45 @@ the counter picks it out of a list, and somebody in the store room may read it a
 uses Crockford base32 with the vowels removed, so there are no ambiguous characters and no
 accidental words.
 
-**Scanning the same barcode twice counts two.** Six identical tins is one line of six, not
+**The camera arms; you record.** The viewfinder frame turns **green** when a barcode has been
+read and is being held, **red** when there is nothing readable, and the code is only added when
+you tap **Capture**. This is not caution for its own sake: a decoder reads a barcode *every
+frame it can see one*, thirty times a second, so recording on each read turns one sweep past a
+shelf into a dozen of the same item — silently, with nothing to notice but a quantity that no
+longer matches the basket. A time-based guard cannot fix that, because no interval both stops
+runaway counting and still lets somebody deliberately scan the same tin twice. Separating
+reading from recording does.
+
+Typing a barcode by hand skips the confirmation, because typing it *is* the confirmation.
+
+**Capturing the same barcode twice counts two.** Six identical tins is one line of six, not
 six lines.
+
+**A scan nobody put anything into is deleted on the way out.** The session is created on the
+server the moment "Start a new scan" is tapped, and it has to be — the operator taps it at the
+counter and then walks into the back room where the signal dies, so deferring that request until
+the first barcode would put it in exactly the dead spot the queue exists to survive. Instead, a
+session that is still empty when it closes is removed, by whichever way it was closed: the
+on-screen arrow and the phone's own back button both route through one handler. An empty scan
+is also *discarded* rather than marked ready, and the button says "Discard" so it is not a lie —
+a ready scan with nothing in it sits at the top of the list at the counter looking like work
+that is waiting, and somebody picks it and gets nothing.
+
+The emptiness check requires the scan to have **loaded successfully** first. Opening a real scan
+on a flaky connection and backing out must never delete it, which is the bug worth being careful
+about here — tidiness is not worth trading for a lost shelf sweep.
+
+**The barcode generator is written out rather than installed.** It is the one thing in the app
+that must be *exactly* right — a label that scans as the wrong number is worse than one that
+does not scan at all — so the arithmetic is where it can be read and tested. `code128.ts`
+carries its own decoder, used only by the tests, so a generated symbol is checked by reading
+the bar widths back the way a scanner would rather than by trusting the encoder's own sums.
+`assertTableSound()` catches a typo anywhere in the 107-symbol pattern table.
+
+**Barcodes are drawn as SVG sized in millimetres, not pixels.** The one number that decides
+whether a label scans is the width of the narrowest bar, and that is a physical measurement.
+Sizing in CSS pixels would make it depend on the printer's idea of a pixel — which is exactly
+the sort of thing that works on the machine it was tested on.
 
 ---
 

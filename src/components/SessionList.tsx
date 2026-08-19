@@ -11,7 +11,17 @@
  * and buried the ID in grey small print would be a worse list even though it looks tidier.
  */
 
-import { AlertTriangle, ChevronRight, Loader2, LogOut, Plus, RefreshCw, Trash2, Upload } from 'lucide-react'
+import {
+  AlertTriangle,
+  ChevronRight,
+  Loader2,
+  LogOut,
+  Plus,
+  Printer,
+  RefreshCw,
+  Trash2,
+  Upload,
+} from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { type ScanSummary, type User, createScan, deleteScan, listScans } from '../lib/api'
 import { discardFor, flush, queueLength } from '../lib/queue'
@@ -38,10 +48,12 @@ function when(iso: string): string {
 export function SessionList({
   user,
   onOpen,
+  onSubBarcodes,
   onSignOut,
 }: {
   user: User
   onOpen: (scanId: string) => void
+  onSubBarcodes: () => void
   onSignOut: () => void
 }) {
   const [scans, setScans] = useState<ScanSummary[]>([])
@@ -122,6 +134,14 @@ export function SessionList({
       <button onClick={() => void start()} disabled={creating} className="btn-primary w-full py-3.5 text-base">
         {creating ? <Loader2 className="h-5 w-5 animate-spin" /> : <Plus className="h-5 w-5" />}
         Start a new scan
+      </button>
+
+      {/* A separate errand, not a scan session: printing a label rather than reading one. It
+          needs no session, no network and no server, so it sits outside the list rather than
+          inside it. */}
+      <button onClick={onSubBarcodes} className="btn-ghost mt-2 w-full py-3 text-[15px]">
+        <Printer className="h-5 w-5" />
+        SubBarcode Printing
       </button>
 
       {pending > 0 && (

@@ -134,6 +134,8 @@ export function LoginScreen({
               password: form.password,
               phone: form.phone.trim() || undefined,
               shopName: form.shopName.trim() || undefined,
+              /* Sent so the server can refuse an unauthorised signup itself, rather than
+                 trusting a check that lives in the browser. */
               developerCode: accessKey.trim(),
               plan,
             });

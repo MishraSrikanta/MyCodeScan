@@ -5,10 +5,19 @@
  * the thing being built, so the operator has to leave the camera after every item to check it
  * worked. Here the list is right there.
  *
- * ── Each scan saves itself ───────────────────────────────────────────────────
- * A barcode is queued locally and sent immediately. There is nothing to press and nothing to
- * remember: by the time the operator has moved to the next shelf, the item is on the server
- * and visible at the counter.
+ * ── Read, then capture ───────────────────────────────────────────────────────
+ * The camera arms; the operator records. A decoder reads a barcode every frame it can see one,
+ * so a handler fired on each read turns one sweep past a shelf into a dozen of the same item —
+ * silently, with nothing to notice but a quantity that no longer matches the basket. So the
+ * viewfinder frame goes **green** when a barcode has been read and is being held, **red** when
+ * there is nothing readable, and the held code is recorded only when Capture is tapped.
+ *
+ * Typing a barcode by hand skips all of that: typing it *is* the confirmation.
+ *
+ * ── Each captured scan saves itself ──────────────────────────────────────────
+ * Once captured, a barcode is queued locally and sent immediately. There is nothing further to
+ * press and nothing to remember: by the time the operator has moved to the next shelf, the item
+ * is on the server and visible at the counter.
  *
  * The queue is what makes that safe rather than merely optimistic. A scan is written to local
  * storage before any request goes out, so a dead signal delays the upload instead of losing
@@ -20,6 +29,19 @@
  * about it. Waiting for a round trip would make the app feel broken on a weak connection and
  * unusable on none. Server responses then replace the local view, so the totals shown are the
  * server's own arithmetic rather than ours.
+ *
+ * ── Custom piece ─────────────────────────────────────────────────────────────
+ * Some of what a shop scans is not a countable unit. Scan the wire, and the line says one — but
+ * what is actually on the counter is a 12.75 m coil. **Custom piece** turns a scanned line into
+ * a sub-barcode line: `200002222` becomes `200002222S12P75`, using the same suffix format as the
+ * SubBarcode Printing section, so the till reads the quantity out of the code instead of
+ * somebody typing it in.
+ *
+ * The line quantity keeps meaning what it meant: **how many pieces**. Three 5 kg bags is
+ * `200002222S5` × 3, not `200002222` × 15. Conflating the two is the mistake the whole scheme
+ * exists to prevent, so the two numbers stay separate — pieces on the line, size in the code.
+ *
+ * See lib/subbarcode.ts for the format and SUBBARCODE-LOGIC.md for the reading side.
  */
 
 import {
@@ -31,17 +53,32 @@ import {
   Loader2,
   Minus,
   Plus,
+  Scale,
   ScanBarcode,
   Trash2,
   Upload,
   Video,
+  X,
   Zap,
   ZapOff,
 } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { type Scan, getScan, removeItem, setItemQty, updateScan } from '../lib/api'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type Scan, addItem, getScan, removeItem, setItemQty, updateScan } from '../lib/api'
 import { enqueue, flush, queueLength } from '../lib/queue'
+import {
+  DECIMAL_MARK,
+  MAX_DECIMALS,
+  SUB_MARK,
+  buildSubCode,
+  encodeQty,
+  formatQty,
+  parentProblem,
+  parseSubCode,
+  qtyProblem,
+} from '../lib/subbarcode'
+import { type SubLabel, listLabels, saveLabel } from '../lib/sublabels'
 import { useScanner } from '../lib/useScanner'
+import { UnitPicker } from './UnitPicker'
 
 /** A local view of a line, so the list can update before the server replies. */
 interface Line {
@@ -53,7 +90,33 @@ function linesFrom(scan: Scan | null): Line[] {
   return (scan?.items ?? []).map((item) => ({ barcode: item.barcode, qty: item.qty }))
 }
 
-export function ScanView({ scanId, onBack }: { scanId: string; onBack: () => void }) {
+/**
+ * The product a line is for, whether or not the line is already a custom piece.
+ *
+ * The reason this exists rather than reading `line.barcode` directly: editing a custom piece
+ * from 5 kg to 6 kg has to *replace* the suffix, not add a second one. Without this, a line
+ * edited twice becomes `200002222S5S6` — which the greedy parser reads as six of a five-kilo
+ * bag, a plausible-looking answer that is wrong.
+ */
+function parentOf(barcode: string): string {
+  return parseSubCode(barcode)?.parent ?? barcode
+}
+
+/** Locally saved labels by code, so a line can show the unit that is not inside its barcode. */
+function byCode(labels: SubLabel[]): Map<string, SubLabel> {
+  return new Map(labels.map((label) => [label.code, label]))
+}
+
+export function ScanView({
+  scanId,
+  onBack,
+  onEmptyChange,
+}: {
+  scanId: string
+  onBack: () => void
+  /** Reports whether this scan holds nothing, so the shell can delete it on the way out. */
+  onEmptyChange: (empty: boolean) => void
+}) {
   const [scan, setScan] = useState<Scan | null>(null)
   const [lines, setLines] = useState<Line[]>([])
   const [label, setLabel] = useState('')
@@ -69,6 +132,17 @@ export function ScanView({ scanId, onBack }: { scanId: string; onBack: () => voi
      beep cannot be heard over a shop. */
   const [flash, setFlash] = useState('')
   const flashTimer = useRef<number | null>(null)
+
+  /* ------------------------------------------------------- custom piece state */
+  /** The barcode of the line whose custom-piece editor is open, or '' for none. */
+  const [customFor, setCustomFor] = useState('')
+  const [customQty, setCustomQty] = useState('')
+  const [customUnit, setCustomUnit] = useState('kg')
+  const [customNote, setCustomNote] = useState('')
+  const [converting, setConverting] = useState(false)
+  const [labels, setLabels] = useState<SubLabel[]>(() => listLabels())
+  const labelFor = useMemo(() => byCode(labels), [labels])
+  const customQtyRef = useRef<HTMLInputElement>(null)
 
   const refreshPending = useCallback(() => setPending(queueLength(scanId)), [scanId])
 
@@ -96,6 +170,28 @@ export function ScanView({ scanId, onBack }: { scanId: string; onBack: () => voi
   useEffect(() => {
     refreshPending()
   }, [refreshPending])
+
+  /*
+   * ── Is there anything in this scan? ─────────────────────────────────────────
+   * Reported upward so the shell can delete a session nobody put anything into — see App.tsx.
+   *
+   * Three conditions, and each one is load-bearing:
+   *
+   *   · `scan` must be non-null. It is only set once `getScan` has *succeeded*, so a scan whose
+   *     load failed on a flaky connection is never reported empty. Without this, opening a real
+   *     scan in a dead spot and backing out would delete it — the worst possible bug to trade for
+   *     a bit of tidiness.
+   *
+   *   · No lines. Includes the case where items were captured and then all deleted, which is
+   *     genuinely an empty scan and should not survive either.
+   *
+   *   · Nothing queued. Barcodes waiting to upload are real captures the server has not heard
+   *     about yet; the item count is zero only because the network is behind.
+   */
+  const empty = Boolean(scan) && lines.length === 0 && pending === 0
+  useEffect(() => {
+    onEmptyChange(empty)
+  }, [empty, onEmptyChange])
 
   /* ------------------------------------------------------------------ sending */
   /**
@@ -157,7 +253,14 @@ export function ScanView({ scanId, onBack }: { scanId: string; onBack: () => voi
     [],
   )
 
-  const camera = useScanner(!loading && !error, onCode)
+  /*
+   * Confirm mode: a read arms the button, it does not record anything.
+   *
+   * Without it, one sweep of the camera past a shelf adds the same item a dozen times — the
+   * decoder reads every frame it can, and the operator's only clue is a quantity that has
+   * silently run away from what is in the basket. See lib/useScanner.ts.
+   */
+  const camera = useScanner(!loading && !error, onCode, true)
 
   /* Flush when the connection comes back. */
   useEffect(() => {
@@ -196,7 +299,110 @@ export function ScanView({ scanId, onBack }: { scanId: string; onBack: () => voi
     }
   }
 
-  const saveLabel = async () => {
+  /* ------------------------------------------------------------- custom piece */
+  /** Opens the editor for a line, pre-filled with whatever that line already says. */
+  const openCustom = (barcode: string) => {
+    const parsed = parseSubCode(barcode)
+    const known = labelFor.get(barcode)
+    setCustomFor(barcode)
+    setCustomQty(parsed ? formatQty(parsed.qty) : '')
+    setCustomUnit(known?.unit || 'kg')
+    setCustomNote(known?.note || '')
+    setError('')
+    window.setTimeout(() => customQtyRef.current?.focus(), 60)
+  }
+
+  const closeCustom = () => {
+    setCustomFor('')
+    setCustomQty('')
+  }
+
+  /**
+   * Turns a scanned line into a custom piece, or changes the size of one that already is.
+   *
+   * ── Why the line is added before the old one is removed ─────────────────────
+   * Two requests, and either could fail. Adding first and removing second means a failure
+   * halfway leaves a *duplicate* line, which is visible and can be deleted. The other order
+   * means a failure halfway leaves *nothing* — the scanned item is gone and the shelf has to be
+   * walked again. A visible mess beats a silent loss.
+   *
+   * ── Why the queue is flushed first ──────────────────────────────────────────
+   * Same reason `changeQty` and `drop` do it: a queued increment for the old barcode that lands
+   * after the removal would resurrect the line we just replaced.
+   *
+   * ── Why the unit is saved separately ────────────────────────────────────────
+   * It is not in the barcode, and the scan endpoints hold nothing but barcodes and quantities.
+   * So it goes to the local label book, which is also what makes the piece printable afterwards
+   * from SubBarcode Printing.
+   */
+  const saveCustom = async () => {
+    const line = lines.find((candidate) => candidate.barcode === customFor)
+    if (!line) {
+      closeCustom()
+      return
+    }
+
+    const parent = parentOf(customFor)
+    const qty = Number(customQty)
+    const problem = parentProblem(parent) || (customQty.trim() ? qtyProblem(qty) : 'How much is in one piece?')
+    if (problem) {
+      setError(problem)
+      return
+    }
+
+    const newCode = buildSubCode(parent, qty)
+    setConverting(true)
+    setError('')
+    try {
+      /* Recorded first and regardless: it is local, it cannot fail, and it is what carries the
+         unit and note that the barcode itself does not. */
+      saveLabel({ format: 'code128', parent, qty, unit: customUnit.trim(), note: customNote.trim() })
+      setLabels(listLabels())
+
+      if (newCode !== customFor) {
+        await flush()
+        refreshPending()
+        /* The piece count travels across unchanged — three bags stay three bags. */
+        await addItem(scanId, newCode, line.qty, crypto.randomUUID())
+        const fresh = await removeItem(scanId, customFor)
+        setScan(fresh)
+        setLines(linesFrom(fresh))
+        setFlash(newCode)
+        if (flashTimer.current) window.clearTimeout(flashTimer.current)
+        flashTimer.current = window.setTimeout(() => setFlash(''), 900)
+      }
+      closeCustom()
+    } catch (caught) {
+      setError((caught as Error).message)
+    } finally {
+      setConverting(false)
+    }
+  }
+
+  /** Puts a custom piece back to the plain product barcode it came from. */
+  const clearCustom = async (barcode: string) => {
+    const line = lines.find((candidate) => candidate.barcode === barcode)
+    const parent = parentOf(barcode)
+    if (!line || parent === barcode) return
+
+    setConverting(true)
+    setError('')
+    try {
+      await flush()
+      refreshPending()
+      await addItem(scanId, parent, line.qty, crypto.randomUUID())
+      const fresh = await removeItem(scanId, barcode)
+      setScan(fresh)
+      setLines(linesFrom(fresh))
+      closeCustom()
+    } catch (caught) {
+      setError((caught as Error).message)
+    } finally {
+      setConverting(false)
+    }
+  }
+
+  const saveLabelName = async () => {
     if (!scan || label === scan.label) return
     try {
       const fresh = await updateScan(scanId, { label })
@@ -206,14 +412,20 @@ export function ScanView({ scanId, onBack }: { scanId: string; onBack: () => voi
     }
   }
 
-  /** Marks the session done and returns to the list. */
+  /**
+   * Marks the session done and returns to the list.
+   *
+   * An empty session is not marked ready — it is left for the shell to delete. A *ready* scan with
+   * nothing in it is worse than no scan at all: it sits at the top of the list at the counter
+   * looking like work that is waiting, and somebody picks it and gets nothing.
+   */
   const finish = async () => {
     setSavingStatus(true)
     setError('')
     try {
       await flush()
       refreshPending()
-      await updateScan(scanId, { status: 'ready', label })
+      if (!empty) await updateScan(scanId, { status: 'ready', label })
       onBack()
     } catch (caught) {
       setError((caught as Error).message)
@@ -249,9 +461,22 @@ export function ScanView({ scanId, onBack }: { scanId: string; onBack: () => voi
             {pending > 0 ? ` · ${pending} to upload` : ' · saved'}
           </p>
         </div>
-        <button onClick={() => void finish()} disabled={savingStatus} className="btn-primary shrink-0 px-3 text-sm">
-          {savingStatus ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-          Done
+        {/* An empty scan is discarded rather than finished, so the button says so. Labelling it
+            "Done" and then silently deleting the session would be a small lie about a destructive
+            action, even a harmless one. */}
+        <button
+          onClick={() => void finish()}
+          disabled={savingStatus}
+          className={`btn shrink-0 px-3 text-sm ${empty ? 'bg-white/10 text-white' : 'bg-brand-500 text-white hover:bg-brand-600'}`}
+        >
+          {savingStatus ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : empty ? (
+            <X className="h-4 w-4" />
+          ) : (
+            <CheckCircle2 className="h-4 w-4" />
+          )}
+          {empty ? 'Discard' : 'Done'}
         </button>
       </header>
 
@@ -269,19 +494,43 @@ export function ScanView({ scanId, onBack }: { scanId: string; onBack: () => voi
           />
         </div>
 
-        {!camera.error && (
-          <div className="pointer-events-none absolute inset-0 mx-auto grid max-w-[520px] place-items-center">
-            <div className="relative h-[42%] w-[78%] max-w-sm">
-              {[
-                'left-0 top-0 border-l-4 border-t-4 rounded-tl-xl',
-                'right-0 top-0 border-r-4 border-t-4 rounded-tr-xl',
-                'left-0 bottom-0 border-b-4 border-l-4 rounded-bl-xl',
-                'right-0 bottom-0 border-b-4 border-r-4 rounded-br-xl',
-              ].map((corner) => (
-                <span key={corner} className={`absolute h-9 w-9 border-brand-400 ${corner}`} />
-              ))}
+        {/* ------------------------------------------------- the red/green light
+            The whole point of confirm mode is that the operator can tell, without looking away
+            from the shelf, whether the app has a barcode. So it is the frame of the viewfinder
+            that changes colour rather than a small icon somewhere: red for nothing readable,
+            green for a code held and waiting. */}
+        {!camera.error && !camera.starting && (
+          <>
+            <div
+              className={`pointer-events-none absolute inset-0 mx-auto max-w-[520px] border-[5px] transition-colors duration-150 ${
+                camera.candidate ? 'border-emerald-500' : 'border-rose-500/80'
+              }`}
+            />
+            <div className="pointer-events-none absolute inset-0 mx-auto grid max-w-[520px] place-items-center">
+              <div className="relative h-[42%] w-[78%] max-w-sm">
+                {[
+                  'left-0 top-0 border-l-4 border-t-4 rounded-tl-xl',
+                  'right-0 top-0 border-r-4 border-t-4 rounded-tr-xl',
+                  'left-0 bottom-0 border-b-4 border-l-4 rounded-bl-xl',
+                  'right-0 bottom-0 border-b-4 border-r-4 rounded-br-xl',
+                ].map((corner) => (
+                  <span
+                    key={corner}
+                    className={`absolute h-9 w-9 transition-colors duration-150 ${
+                      camera.candidate ? 'border-emerald-400' : 'border-white/50'
+                    } ${corner}`}
+                  />
+                ))}
+              </div>
             </div>
-          </div>
+            <p
+              className={`pointer-events-none absolute inset-x-0 top-0 mx-auto max-w-[520px] px-4 py-1.5 text-center text-[12px] font-bold transition-colors duration-150 ${
+                camera.candidate ? 'bg-emerald-500 text-white' : 'bg-rose-500/90 text-white'
+              }`}
+            >
+              {camera.candidate ? 'Barcode read — tap Capture' : 'No barcode readable'}
+            </p>
+          </>
         )}
 
         {camera.error && (
@@ -299,16 +548,42 @@ export function ScanView({ scanId, onBack }: { scanId: string; onBack: () => voi
           <p className="absolute inset-x-0 top-2 text-center text-[12px] text-white/60">Opening the camera…</p>
         )}
 
-        {lastCode && !camera.error && (
+        {/* The held code, or the last one recorded once nothing is held. */}
+        {(camera.candidate || lastCode) && !camera.error && (
           <p className="absolute inset-x-0 bottom-0 mx-auto max-w-[520px] truncate bg-gradient-to-t from-black/85 to-transparent px-4 pb-2 pt-6 text-center font-mono text-[13px] font-semibold">
-            <Check className="mr-1 inline h-3.5 w-3.5 text-emerald-400" />
-            {lastCode}
+            {camera.candidate ? (
+              <ScanBarcode className="mr-1 inline h-3.5 w-3.5 text-emerald-400" />
+            ) : (
+              <Check className="mr-1 inline h-3.5 w-3.5 text-white/50" />
+            )}
+            {camera.candidate || lastCode}
           </p>
         )}
       </div>
 
       {/* --------------------------------------------------------- controls */}
       <div className="shrink-0 space-y-2 px-3 pt-2.5">
+        {/* Capture is the primary action on this screen and sits directly under the viewfinder,
+            where a thumb already is. Disabled rather than hidden while seeking: a button that
+            appears and disappears is a button that gets mis-tapped. */}
+        <div className="flex gap-2">
+          <button
+            onClick={camera.capture}
+            disabled={!camera.candidate}
+            className={`btn min-w-0 flex-1 py-3.5 text-base ${
+              camera.candidate ? 'bg-emerald-500 text-white hover:bg-emerald-600' : 'bg-white/10 text-white/40'
+            }`}
+          >
+            <Check className="h-5 w-5 shrink-0" />
+            <span className="truncate">{camera.candidate ? `Capture ${camera.candidate}` : 'Capture'}</span>
+          </button>
+          {camera.candidate && (
+            <button onClick={camera.discard} aria-label="Discard this barcode" className="btn-ghost shrink-0 px-3">
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+
         <div className="no-scrollbar flex items-center justify-center gap-2 overflow-x-auto">
           {camera.torchAvailable && (
             <button
@@ -375,7 +650,7 @@ export function ScanView({ scanId, onBack }: { scanId: string; onBack: () => voi
         <input
           value={label}
           onChange={(event) => setLabel(event.target.value)}
-          onBlur={() => void saveLabel()}
+          onBlur={() => void saveLabelName()}
           placeholder="Label this scan — e.g. Shelf 3, or Cold store"
           maxLength={80}
           className="field text-[14px]"
@@ -408,7 +683,8 @@ export function ScanView({ scanId, onBack }: { scanId: string; onBack: () => voi
                 <ScanBarcode className="mx-auto h-7 w-7 text-white/20" />
                 <p className="mt-2 text-[13.5px] font-semibold text-white/60">Nothing scanned yet</p>
                 <p className="mt-1 text-[12px] leading-relaxed text-white/35">
-                  Point the camera at a barcode. Scan the same one twice to count two.
+                  Point the camera at a barcode. The frame turns green when it has been read — then
+                  tap Capture. Capture the same one twice to count two.
                 </p>
               </div>
             </div>
@@ -416,43 +692,160 @@ export function ScanView({ scanId, onBack }: { scanId: string; onBack: () => voi
 
           {/* Newest first: on a short list the alternative is that every new scan lands below
               the fold, which defeats having the list at all. */}
-          {[...lines].reverse().map((line) => (
-            <article
-              key={line.barcode}
-              className={`flex items-center gap-2 rounded-xl px-2.5 py-2 transition-colors ${
-                flash === line.barcode ? 'bg-emerald-500/20' : 'bg-white/[0.06]'
-              }`}
-            >
-              <span className="min-w-0 flex-1 truncate font-mono text-[13.5px]">{line.barcode}</span>
+          {[...lines].reverse().map((line) => {
+            const piece = parseSubCode(line.barcode)
+            const known = labelFor.get(line.barcode)
+            const open = customFor === line.barcode
+            /* Live preview of the suffix, so `5.003` becoming `S5P003` is never a surprise. */
+            const draftQty = Number(customQty)
+            const suffix =
+              customQty.trim() && Number.isFinite(draftQty) && !qtyProblem(draftQty)
+                ? `${SUB_MARK}${encodeQty(draftQty)}`
+                : ''
 
-              <div className="flex shrink-0 items-center gap-0.5 rounded-lg bg-black/30 p-0.5">
-                <button
-                  onClick={() => void changeQty(line.barcode, line.qty - 1)}
-                  disabled={line.qty <= 1}
-                  aria-label={`One less of ${line.barcode}`}
-                  className="grid h-7 w-7 place-items-center rounded-md text-white/80 hover:bg-white/10 disabled:opacity-30"
-                >
-                  <Minus className="h-3.5 w-3.5" />
-                </button>
-                <span className="min-w-[1.75rem] text-center text-[13px] font-bold">{line.qty}</span>
-                <button
-                  onClick={() => void changeQty(line.barcode, line.qty + 1)}
-                  aria-label={`One more of ${line.barcode}`}
-                  className="grid h-7 w-7 place-items-center rounded-md text-white/80 hover:bg-white/10"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                </button>
-              </div>
-
-              <button
-                onClick={() => void drop(line.barcode)}
-                aria-label={`Remove ${line.barcode}`}
-                className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-white/30 hover:bg-rose-500/20 hover:text-rose-400"
+            return (
+              <article
+                key={line.barcode}
+                className={`rounded-xl transition-colors ${
+                  flash === line.barcode ? 'bg-emerald-500/20' : open ? 'bg-white/[0.1]' : 'bg-white/[0.06]'
+                }`}
               >
-                <Trash2 className="h-4 w-4" />
-              </button>
-            </article>
-          ))}
+                <div className="flex items-center gap-2 px-2.5 py-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-mono text-[13.5px]">
+                      {piece ? (
+                        <>
+                          <span className="text-white/70">{piece.parent}</span>
+                          <span className="font-bold text-brand-400">
+                            {line.barcode.slice(piece.parent.length)}
+                          </span>
+                        </>
+                      ) : (
+                        line.barcode
+                      )}
+                    </p>
+                    {piece && (
+                      <p className="mt-0.5 text-[11.5px] text-brand-400">
+                        {formatQty(piece.qty)} {known?.unit ?? ''} per piece
+                        {known?.note ? ` · ${known.note}` : ''}
+                      </p>
+                    )}
+                  </div>
+
+                  <button
+                    onClick={() => (open ? closeCustom() : openCustom(line.barcode))}
+                    aria-label={`Custom piece for ${line.barcode}`}
+                    aria-expanded={open}
+                    className={`grid h-7 w-7 shrink-0 place-items-center rounded-md ${
+                      piece || open ? 'bg-brand-500/25 text-brand-300' : 'text-white/30 hover:bg-white/10'
+                    }`}
+                  >
+                    <Scale className="h-4 w-4" />
+                  </button>
+
+                  <div className="flex shrink-0 items-center gap-0.5 rounded-lg bg-black/30 p-0.5">
+                    <button
+                      onClick={() => void changeQty(line.barcode, line.qty - 1)}
+                      disabled={line.qty <= 1}
+                      aria-label={`One less of ${line.barcode}`}
+                      className="grid h-7 w-7 place-items-center rounded-md text-white/80 hover:bg-white/10 disabled:opacity-30"
+                    >
+                      <Minus className="h-3.5 w-3.5" />
+                    </button>
+                    <span className="min-w-[1.75rem] text-center text-[13px] font-bold">{line.qty}</span>
+                    <button
+                      onClick={() => void changeQty(line.barcode, line.qty + 1)}
+                      aria-label={`One more of ${line.barcode}`}
+                      className="grid h-7 w-7 place-items-center rounded-md text-white/80 hover:bg-white/10"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+
+                  <button
+                    onClick={() => void drop(line.barcode)}
+                    aria-label={`Remove ${line.barcode}`}
+                    className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-white/30 hover:bg-rose-500/20 hover:text-rose-400"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+
+                {/* ------------------------------------------- custom piece editor */}
+                {open && (
+                  <div className="space-y-2 border-t border-white/10 px-2.5 py-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[11px] font-bold uppercase tracking-wider text-white/50">
+                        Custom piece
+                      </p>
+                      <button onClick={closeCustom} aria-label="Close" className="text-white/40">
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <input
+                        ref={customQtyRef}
+                        value={customQty}
+                        onChange={(event) => setCustomQty(event.target.value)}
+                        placeholder="5"
+                        inputMode="decimal"
+                        aria-label="How much in one piece"
+                        className="field w-20 shrink-0 py-2 text-center text-[16px] font-bold"
+                      />
+                      <UnitPicker
+                        key={customFor}
+                        value={customUnit}
+                        onChange={setCustomUnit}
+                        className="w-20 shrink-0"
+                      />
+                      <input
+                        value={customNote}
+                        onChange={(event) => setCustomNote(event.target.value)}
+                        placeholder="Note (optional)"
+                        maxLength={40}
+                        aria-label="Note"
+                        className="field min-w-0 flex-1 py-2 text-[13px]"
+                      />
+                    </div>
+
+                    <p className="font-mono text-[12.5px] leading-relaxed text-white/50">
+                      {parentOf(line.barcode)}
+                      <span className="font-bold text-brand-400">{suffix}</span>
+                      {suffix ? '' : `${SUB_MARK}…`}
+                    </p>
+
+                    <p className="text-[11.5px] leading-relaxed text-white/40">
+                      This is the size of <strong>one piece</strong>. The line still counts pieces, so{' '}
+                      {line.qty} × {customQty.trim() || '5'} {customUnit || 'kg'} stays {line.qty} on the
+                      line. Up to {MAX_DECIMALS} decimal places; a point prints as{' '}
+                      <span className="font-mono">{DECIMAL_MARK}</span>.
+                    </p>
+
+                    <div className="flex gap-2">
+                      {piece && (
+                        <button
+                          onClick={() => void clearCustom(line.barcode)}
+                          disabled={converting}
+                          className="btn-ghost flex-1 py-2 text-[13px]"
+                        >
+                          Back to plain
+                        </button>
+                      )}
+                      <button
+                        onClick={() => void saveCustom()}
+                        disabled={converting || !suffix}
+                        className="btn-primary flex-1 py-2 text-[13px]"
+                      >
+                        {converting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                        Save piece
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </article>
+            )
+          })}
         </div>
       </div>
     </div>
