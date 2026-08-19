@@ -7,6 +7,7 @@
  * leaving a scan, and leaving the sub-barcode section — because on a phone that is the
  * button people actually use.
  */
+
 import { Loader2 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { LoginScreen } from './components/LoginScreen'
