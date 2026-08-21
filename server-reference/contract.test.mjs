@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const PORT = 8791
-/* The host root: paths carry their own api/ prefix, matching MyStokio. */
+/* The host root: paths carry their own api/ prefix, matching MyStockio. */
 const BASE = `http://127.0.0.1:${PORT}`
 const DATA_DIR = mkdtempSync(join(tmpdir(), 'mycodescan-test-'))
 
@@ -182,7 +182,7 @@ try {
   const loggedOut = await call('POST', '/api/v1/auth/logout', { token, body: {} })
   check('logout answers 204', loggedOut.status === 204, String(loggedOut.status))
 
-  /* MyStokio's client manufactures this exact string when its backend is unreachable. */
+  /* MyStockio's client manufactures this exact string when its backend is unreachable. */
   const demo = await call('GET', '/api/v1/scans', { token: 'demo-token' })
   check('the literal demo-token is refused', demo.status === 401, String(demo.status))
 

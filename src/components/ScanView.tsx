@@ -1,18 +1,24 @@
 /**
  * The scanning screen: camera above, the list of what has been scanned below.
  *
- * Same split as MyStokio's billing scanner, for the same reason — a full-screen camera hides
+ * Same split as MyStockio's billing scanner, for the same reason — a full-screen camera hides
  * the thing being built, so the operator has to leave the camera after every item to check it
  * worked. Here the list is right there.
  *
- * ── Read, then capture ───────────────────────────────────────────────────────
- * The camera arms; the operator records. A decoder reads a barcode every frame it can see one,
- * so a handler fired on each read turns one sweep past a shelf into a dozen of the same item —
- * silently, with nothing to notice but a quantity that no longer matches the basket. So the
- * viewfinder frame goes **green** when a barcode has been read and is being held, **red** when
- * there is nothing readable, and the held code is recorded only when Capture is tapped.
+ * ── The camera arms; the operator records ────────────────────────────────────
+ * A decoder reads a barcode every frame it can see one, so a handler fired on each read turns one
+ * sweep past a shelf into a dozen of the same item — silently, with nothing to notice but a
+ * quantity that no longer matches the basket. So the viewfinder frame goes **green** when a
+ * barcode is held and ready, **red** when nothing has been read, and the code is added only when
+ * the button beneath it is tapped.
  *
- * Typing a barcode by hand skips all of that: typing it *is* the confirmation.
+ * **The button stays armed, and adding is the only thing it does.** Six identical tins is six
+ * taps, camera still pointed at the shelf; the next item needs no button at all, because aiming at
+ * a different barcode swaps what the button will add. There is nothing to dismiss and nothing to
+ * reopen, which is the whole point — the alternative is leaving and re-entering the camera once
+ * per item.
+ *
+ * Typing a barcode by hand skips the confirmation: typing it *is* the confirmation.
  *
  * ── Each captured scan saves itself ──────────────────────────────────────────
  * Once captured, a barcode is queued locally and sent immediately. There is nothing further to
@@ -528,7 +534,7 @@ export function ScanView({
                 camera.candidate ? 'bg-emerald-500 text-white' : 'bg-rose-500/90 text-white'
               }`}
             >
-              {camera.candidate ? 'Barcode read — tap Capture' : 'No barcode readable'}
+              {camera.candidate ? 'Ready — tap to add, again for another' : 'No barcode readable'}
             </p>
           </>
         )}
@@ -563,26 +569,32 @@ export function ScanView({
 
       {/* --------------------------------------------------------- controls */}
       <div className="shrink-0 space-y-2 px-3 pt-2.5">
-        {/* Capture is the primary action on this screen and sits directly under the viewfinder,
-            where a thumb already is. Disabled rather than hidden while seeking: a button that
-            appears and disappears is a button that gets mis-tapped. */}
-        <div className="flex gap-2">
-          <button
-            onClick={camera.capture}
-            disabled={!camera.candidate}
-            className={`btn min-w-0 flex-1 py-3.5 text-base ${
-              camera.candidate ? 'bg-emerald-500 text-white hover:bg-emerald-600' : 'bg-white/10 text-white/40'
-            }`}
-          >
-            <Check className="h-5 w-5 shrink-0" />
-            <span className="truncate">{camera.candidate ? `Capture ${camera.candidate}` : 'Capture'}</span>
-          </button>
-          {camera.candidate && (
-            <button onClick={camera.discard} aria-label="Discard this barcode" className="btn-ghost shrink-0 px-3">
-              <X className="h-4 w-4" />
-            </button>
-          )}
-        </div>
+        {/*
+            Capture is the primary action on this screen and sits directly under the viewfinder,
+            where a thumb already is.
+
+            One button, full width, and it stays armed after a press: six identical tins is six
+            taps without the camera ever leaving the shelf. There is nothing to dismiss and nothing
+            to reopen — aiming at a different barcode swaps what the button will add. Disabled
+            rather than hidden before the first read, because a button that appears and disappears
+            is a button that gets mis-tapped.
+
+            It carries the code it will record. That is not decoration: because the candidate
+            survives the barcode leaving the frame, the label is the only thing standing between a
+            stray tap and an extra item.
+        */}
+        <button
+          onClick={camera.capture}
+          disabled={!camera.candidate}
+          className={`btn w-full py-3.5 text-base ${
+            camera.candidate ? 'bg-emerald-500 text-white hover:bg-emerald-600' : 'bg-white/10 text-white/40'
+          }`}
+        >
+          <Check className="h-5 w-5 shrink-0" />
+          <span className="truncate">
+            {camera.candidate ? `Add ${camera.candidate}` : 'Point at a barcode'}
+          </span>
+        </button>
 
         <div className="no-scrollbar flex items-center justify-center gap-2 overflow-x-auto">
           {camera.torchAvailable && (
@@ -684,7 +696,7 @@ export function ScanView({
                 <p className="mt-2 text-[13.5px] font-semibold text-white/60">Nothing scanned yet</p>
                 <p className="mt-1 text-[12px] leading-relaxed text-white/35">
                   Point the camera at a barcode. The frame turns green when it has been read — then
-                  tap Capture. Capture the same one twice to count two.
+                  tap the button below to add it. Tap again for another of the same.
                 </p>
               </div>
             </div>

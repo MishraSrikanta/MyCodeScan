@@ -4,13 +4,13 @@
  * Written against API-CONTRACT.md, not against the reference server. If the two ever
  * disagree, the document is right and the server is wrong.
  *
- * ── Authentication is MyStokio's ────────────────────────────────────────────
+ * ── Authentication is MyStockio's ────────────────────────────────────────────
  * There are no MyCodeScan accounts. Sign-in goes to `api/v1/auth/login` and `api/v1/auth/register`
- * — the same endpoints MyStokio has always used — and tokens are kept under the same
+ * — the same endpoints MyStockio has always used — and tokens are kept under the same
  * localStorage keys, so serving both apps from one origin shares a single session. One
  * account, both apps.
  *
- * There is deliberately no guest or demo path. MyStokio's own `loginRequest` falls back to
+ * There is deliberately no guest or demo path. MyStockio's own `loginRequest` falls back to
  * a hard-coded "demo-token" whenever the backend is unreachable, which means any
  * credentials appear to work offline. That is defensible for an app whose data never
  * leaves the device; it is not defensible here, where the token is the only thing keeping
@@ -362,7 +362,7 @@ function tokenFrom(body: AuthResponse): string {
 /**
  * Signs in with an email and password.
  *
- * No demo fallback. MyStokio's own client substitutes a hard-coded token when the request
+ * No demo fallback. MyStockio's own client substitutes a hard-coded token when the request
  * fails, which makes any credentials appear to work offline; here a failed sign-in fails.
  */
 export async function login(email: string, password: string): Promise<User> {

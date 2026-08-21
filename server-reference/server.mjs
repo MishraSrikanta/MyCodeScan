@@ -32,7 +32,7 @@ const PORT = Number(process.env.PORT ?? 8787)
 /*
  * Routes are absolute, and split deliberately:
  *
- *   api/auth/...     MyStokio's existing endpoints, unversioned. Not ours to renumber.
+ *   api/auth/...     MyStockio's existing endpoints, unversioned. Not ours to renumber.
  *   api/v1/scans/... the new scan surface, versioned from the start so its shape can
  *                    change later without breaking a phone nobody has updated.
  */
@@ -330,7 +330,7 @@ function authenticate(req) {
   const match = /^Bearer\s+(.+)$/i.exec(header)
   if (!match) return null
   /*
-   * MyStokio's client manufactures a literal "demo-token" when its backend is
+   * MyStockio's client manufactures a literal "demo-token" when its backend is
    * unreachable, so that string will genuinely arrive here. Refused explicitly rather
    * than left to fail signature verification, because a server that ever accepted it
    * would hand one shop's scan sessions to anybody who typed any password.
@@ -360,13 +360,13 @@ function touch(scan) {
 /**
  * Whether an identifier is usable.
  *
- * Non-empty, and that is all. MyStokio's login field is a free-text **User ID** — its
+ * Non-empty, and that is all. MyStockio's login field is a free-text **User ID** — its
  * client validates nothing in login mode and only checks emptiness on signup — so an
  * account may legitimately be identified by a phone number, a shop code or a name.
  * Enforcing an email pattern here would create accounts that cannot be signed into from
  * the app that owns the login screen.
  *
- * The JSON field is still called `email` because that is what MyStokio sends. The name is
+ * The JSON field is still called `email` because that is what MyStockio sends. The name is
  * historical; the meaning is "identifier".
  */
 const isValidIdentifier = (value) => typeof value === 'string' && value.trim().length > 0 && value.trim().length <= 190
@@ -650,7 +650,7 @@ async function handle(req, res, route, body, origin, url) {
   if (!itemsSuffix) {
     if (req.method === 'DELETE') {
       /*
-       * Idempotent by contract: MyStokio calls this automatically after saving an
+       * Idempotent by contract: MyStockio calls this automatically after saving an
        * invoice and may retry. A 404 here would report a failure for an operation that
        * had in fact already succeeded.
        */

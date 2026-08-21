@@ -2,7 +2,7 @@
  * Sub-barcodes: one printed label for one weighed or cut portion of a parent product.
  *
  * The problem this solves. A shop sells 8mm wire by the metre and cashew by the kilo. There
- * is one product in MyStokio, `200002222`, with one barcode — but what crosses the counter
+ * is one product in MyStockio, `200002222`, with one barcode — but what crosses the counter
  * is a 5 kg bag or a 12.75 m coil, and scanning the parent barcode can only ever say "one".
  * The weight is written on the bag in biro and typed in at the till, which is where the
  * mistakes are.
@@ -36,7 +36,7 @@
  *     payload to letters and digits removes a whole class of "it works on my scanner".
  *
  *   · **The unit is not in the barcode.** `200002222S5` means five *of whatever that product
- *     is sold in* — the unit already on the product page in MyStokio. Putting `KG` in the
+ *     is sold in* — the unit already on the product page in MyStockio. Putting `KG` in the
  *     code would let a label disagree with its own product, and a label that says 5 kg of a
  *     product priced per metre is a worse failure than a label that says 5.
  *
@@ -61,7 +61,7 @@
  * There is a second, all-numeric EAN-13 format further down this file for tills whose
  * scanners cannot read Code 128 at all. It is documented where it is defined.
  *
- * See SUBBARCODE-LOGIC.md for both, written for the MyStokio side.
+ * See SUBBARCODE-LOGIC.md for both, written for the MyStockio side.
  */
 
 import { gtinWarning, isValidEan13, toEan13, withCheckDigit } from './ean13'
@@ -183,7 +183,7 @@ export function parentWarning(parent: string): string {
 }
 
 /**
- * Builds the printed code. The single function to copy into MyStokio.
+ * Builds the printed code. The single function to copy into MyStockio.
  *
  * Throws on invalid input rather than returning something unprintable — the callers here
  * check with `parentProblem`/`qtyProblem` first, and a silently wrong label is the failure
@@ -274,7 +274,7 @@ export function formatQty(qty: number): string {
  * ── What makes the lookup survivable ────────────────────────────────────────
  * The six digits are not assigned; they are **taken from the parent barcode itself** — the
  * last six digits of a GTIN's twelve-digit body, which is the item-reference part that a
- * manufacturer assigns sequentially. So MyStokio needs no new table and no synchronisation:
+ * manufacturer assigns sequentially. So MyStockio needs no new table and no synchronisation:
  * it finds the product by scanning its own catalogue for one whose barcode ends its body with
  * those six digits. The map is derived from data both sides already hold.
  *
@@ -283,7 +283,7 @@ export function formatQty(qty: number): string {
  * would sell the wrong product. So it must be *checked at print time*, against the shop's
  * product list, which is the one moment where somebody is present to resolve it.
  * `itemRefFor` returns the digits; checking them for a clash is the caller's job, and
- * SUBBARCODE-LOGIC.md spells out the query MyStokio should run.
+ * SUBBARCODE-LOGIC.md spells out the query MyStockio should run.
  *
  * A parent that is not GTIN-shaped at all — `WIRE-8`, a shop's own short SKU — has no digits
  * to take, so for those the six-digit number has to be typed once and kept with the label.

@@ -7,7 +7,7 @@
  *
  * The scan ID is the largest thing on each row on purpose. It is the one piece of information
  * that has to cross the shop: somebody standing at the counter picks it out of a list in
- * MyStokio, and somebody in the store room may read it aloud. A row that led with the label
+ * MyStockio, and somebody in the store room may read it aloud. A row that led with the label
  * and buried the ID in grey small print would be a worse list even though it looks tidier.
  */
 
@@ -208,7 +208,7 @@ export function SessionList({
       </div>
 
       <p className="mt-6 text-center text-[12px] leading-relaxed text-white/30">
-        Every barcode saves itself as you scan it. A scan disappears from this list once it has been billed in MyStokio,
+        Every barcode saves itself as you scan it. A scan disappears from this list once it has been billed in MyStockio,
         and after 30 days regardless.
       </p>
     </div>

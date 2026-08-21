@@ -5,7 +5,7 @@
 Two front-ends are already written against it, byte for byte:
 
 - `mycodescan/` — the phone scanner app (this folder).
-- `MyStokio` → `src/lib/codescan.ts` — the billing-side client that lists scans, reads
+- `MyStockio` → `src/lib/codescan.ts` — the billing-side client that lists scans, reads
   them onto a bill, and deletes them afterwards.
 
 **Authentication is shared.** Section 3 documents the `/api/v1/auth` router both apps sign in
@@ -29,15 +29,15 @@ against and to settle any question this document leaves ambiguous.
 A shopkeeper walks around the shop with a phone, scanning barcodes into a **scan
 session**. Each session has a short human-readable **scan ID** such as `SC-7QK2M`.
 
-Later, at the billing counter on a PC, they open MyStokio → New Sale → **MyCodeScan**,
+Later, at the billing counter on a PC, they open MyStockio → New Sale → **MyCodeScan**,
 see their sessions listed, pick one, and every barcode in it is added to the bill.
-When the invoice is saved, MyStokio deletes the session.
+When the invoice is saved, MyStockio deletes the session.
 
 The backend is therefore a small, short-lived holding area for barcode lists. It is
 **not** a product catalogue and **not** a copy of the shop's data. It never sees prices,
 customers or invoices — only barcode strings and quantities.
 
-That boundary is deliberate and should be preserved: MyStokio's whole promise is that
+That boundary is deliberate and should be preserved: MyStockio's whole promise is that
 shop data stays on the shop's own machine. A barcode number on its own is not shop
 data in any meaningful sense; a product list with cost prices would be.
 
@@ -103,7 +103,7 @@ people's scan IDs by watching which ones give 403 rather than 404.
 The two front-ends are on different origins from the API, so CORS is required, not
 optional:
 
-- `Access-Control-Allow-Origin` — the deployed MyCodeScan origin, the deployed MyStokio
+- `Access-Control-Allow-Origin` — the deployed MyCodeScan origin, the deployed MyStockio
   origin, and `http://localhost:5173` / `http://localhost:5174` for development. Echo a
   matching origin from an allow-list; **do not** use `*` together with credentials.
 - `Access-Control-Allow-Headers: Authorization, Content-Type`
@@ -124,7 +124,7 @@ quickly rather than for an average.
 
 ## 3. Authentication — the `/api/v1/auth` router
 
-**MyCodeScan has no accounts of its own.** It signs in against the same router MyStokio uses,
+**MyCodeScan has no accounts of its own.** It signs in against the same router MyStockio uses,
 so one account works in both apps and a scan made on the phone is readable at the counter.
 
 Auth is mounted at `/api/v1/auth` — `app.use("/api/v1/auth", accountAuthRoutes)`. Four routes:
@@ -375,7 +375,7 @@ every session's contents.
 
 Barcodes are stored **as scanned**, not normalised or validated. The server has no
 product catalogue and cannot know whether `0000123` and `123` are the same item;
-guessing would silently bill the wrong product. Matching is MyStokio's job.
+guessing would silently bill the wrong product. Matching is MyStockio's job.
 
 **A barcode is unique within a scan.** Scanning the same code twice increments `qty`
 rather than adding a second row. This is what makes the phone usable — a shopkeeper
@@ -483,7 +483,7 @@ Deletes the session and its items.
 `204` with no body.
 
 **This must be idempotent: deleting an already-deleted scan returns `204`, not `404`.**
-MyStokio calls this automatically after saving an invoice, and may retry after a network
+MyStockio calls this automatically after saving an invoice, and may retry after a network
 error. A `404` there would surface as a scary error message about a session the user has
 already finished with, for an operation that in fact succeeded.
 
@@ -564,9 +564,9 @@ when the connection returns. Two consequences for a server implementation:
 
 ## 6b. The billing flow, precisely
 
-This is the sequence MyStokio performs. Getting the order right matters.
+This is the sequence MyStockio performs. Getting the order right matters.
 
-1. `GET api/v1/scans?status=ready` — the picker list. (MyStokio actually requests all
+1. `GET api/v1/scans?status=ready` — the picker list. (MyStockio actually requests all
    statuses, so a session left `open` is still reachable.)
 2. `GET api/v1/scans/{scanId}` — read the items.
 3. *Locally*, match each barcode against the shop's own products. Unmatched barcodes are
@@ -581,7 +581,7 @@ browser, a power cut — the barcode list is gone and the shopkeeper must walk t
 again. Reading is cheap and idempotent; deleting is destructive and belongs after the
 work it enables has succeeded.
 
-If step 5 fails, MyStokio does not block or warn: the invoice is saved, which is what
+If step 5 fails, MyStockio does not block or warn: the invoice is saved, which is what
 matters, and the stale session can be deleted from the phone. Servers should therefore
 expect sessions that are never explicitly deleted.
 

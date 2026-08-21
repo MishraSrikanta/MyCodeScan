@@ -17,7 +17,7 @@
  *     200002222  +  5.003  →  200002222S5P003
  *
  * The parent digits are never rewritten, shortened, hashed or looked up. The code gets longer;
- * that is the whole cost. Anything reading it — MyStokio, a till, a person — recovers the
+ * that is the whole cost. Anything reading it — MyStockio, a till, a person — recovers the
  * product by cutting at the last `S` and reads the quantity from what follows.
  *
  * ── The two jobs on this screen ─────────────────────────────────────────────
@@ -413,7 +413,7 @@ export function SubBarcodeView({ onBack }: { onBack: () => void }) {
                     camera.candidate ? 'bg-emerald-500 text-white' : 'bg-rose-500/90 text-white'
                   }`}
                 >
-                  {camera.candidate ? 'Barcode read — tap Capture' : 'No barcode readable'}
+                  {camera.candidate ? 'Ready — tap to use it' : 'No barcode readable'}
                 </p>
                 <p className="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/85 to-transparent px-4 pb-2 pt-6 text-center font-mono text-[12.5px] font-semibold">
                   {camera.candidate ||
@@ -437,12 +437,14 @@ export function SubBarcodeView({ onBack }: { onBack: () => void }) {
             )}
           </div>
 
+          {/* One button here too, though a label only ever needs one parent, so this one closes
+              the camera on use rather than staying armed. */}
           {!camera.error && (
-            <div className="flex gap-2 p-2 pb-0">
+            <div className="p-2 pb-0">
               <button
                 onClick={camera.capture}
                 disabled={!camera.candidate}
-                className={`btn min-w-0 flex-1 py-3 text-[15px] ${
+                className={`btn w-full py-3 text-[15px] ${
                   camera.candidate
                     ? 'bg-emerald-500 text-white hover:bg-emerald-600'
                     : 'bg-white/10 text-white/40'
@@ -450,18 +452,9 @@ export function SubBarcodeView({ onBack }: { onBack: () => void }) {
               >
                 <Check className="h-5 w-5 shrink-0" />
                 <span className="truncate">
-                  {camera.candidate ? `Capture ${camera.candidate}` : 'Capture'}
+                  {camera.candidate ? `Use ${camera.candidate}` : 'Point at a barcode'}
                 </span>
               </button>
-              {camera.candidate && (
-                <button
-                  onClick={camera.discard}
-                  aria-label="Discard this barcode"
-                  className="btn-ghost shrink-0 px-3"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              )}
             </div>
           )}
 
@@ -615,7 +608,7 @@ export function SubBarcodeView({ onBack }: { onBack: () => void }) {
             {MAX_DECIMALS} decimal places. A decimal point is printed as{' '}
             <span className="font-mono">{DECIMAL_MARK}</span>, so 5.003 becomes{' '}
             <span className="font-mono">5{DECIMAL_MARK}003</span>. The unit is printed on the label but is{' '}
-            <em>not</em> inside the barcode — the code says the number, and the product page in MyStokio
+            <em>not</em> inside the barcode — the code says the number, and the product page in MyStockio
             says what it means.
           </p>
         </div>
@@ -664,7 +657,7 @@ export function SubBarcodeView({ onBack }: { onBack: () => void }) {
             />
             <span className="mt-1 block text-[11.5px] leading-relaxed text-white/40">
               {derivedRef
-                ? `Left blank, this uses ${derivedRef} — the last six digits of the parent barcode, which MyStokio can work out for itself with no lookup table.`
+                ? `Left blank, this uses ${derivedRef} — the last six digits of the parent barcode, which MyStockio can work out for itself with no lookup table.`
                 : 'This parent is not an EAN-13, so there is nothing to derive it from. Choose a number and use the same one for this product every time.'}
             </span>
           </label>

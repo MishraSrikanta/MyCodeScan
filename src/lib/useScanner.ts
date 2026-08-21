@@ -1,7 +1,7 @@
 /**
  * Camera barcode decoding, as a hook.
  *
- * A leaner sibling of the scanner in MyStokio, carrying over the four failures that
+ * A leaner sibling of the scanner in MyStockio, carrying over the four failures that
  * cost real time to diagnose there. Each one leaves the viewfinder live and nothing
  * happening, which is indistinguishable to the person holding the phone, so each is
  * detected and named rather than swallowed:
@@ -28,18 +28,29 @@
  * it, because there is no interval that both stops runaway counting and still lets somebody
  * deliberately scan the same tin twice.
  *
- * So `confirm` inverts who decides. The decoder *arms* — it holds the code it read and stops —
- * and the code is handed over only when `capture()` is called, from a button the operator
- * presses. Reading and recording become two separate acts, which is what they always were.
+ * So `confirm` inverts who decides. The decoder *arms* — it holds the code it read — and the code
+ * is handed over only when `capture()` is called, from a button the operator presses. Reading and
+ * recording become two separate acts, which is what they always were.
  *
  * Two states, and the interface is expected to make them visible:
  *
- *   · **seeking** — nothing readable in frame. `candidate` is ''.
- *   · **armed** — a barcode has been read and is waiting. `candidate` is that code.
+ *   · **seeking** — nothing has been read yet. `candidate` is ''.
+ *   · **armed** — a barcode is held and ready. `candidate` is that code.
  *
- * `capture()` and `discard()` both stamp the repeat guard, so the indicator visibly returns to
- * seeking rather than re-arming in the same frame off a barcode that is still in view — which
- * would make both buttons look as though they had done nothing.
+ * ── The candidate stays armed after a capture ────────────────────────────────
+ * `capture()` does *not* clear it, and there is no discard. That is what makes counting fast: six
+ * identical tins is six taps of one button, with the camera never leaving the shelf. Clearing on
+ * capture would mean re-aiming at the same barcode between every tin and waiting out a repeat
+ * guard each time — the slow, fiddly version of exactly the same work.
+ *
+ * The candidate is replaced when a *different* barcode is read, so moving to the next item needs
+ * no button at all. It is never cleared by the barcode merely leaving the frame: the operator's
+ * thumb is on the button, not on the phone's aim, and greying it out mid-sequence would break the
+ * run of taps it exists to support.
+ *
+ * The cost, and it is real: point the camera at nothing and the last code is still armed, so a
+ * stray tap adds another of it. That is why the button carries the code it will record rather than
+ * the word "Capture" alone — the operator is looking at the thing they are about to add.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -54,9 +65,9 @@ const NATIVE_FAILURE_LIMIT = 15
 /**
  * One scan per barcode per this long.
  *
- * In free-running mode this is the only thing stopping a code held still from firing every
- * frame. In confirm mode it is a cooldown after a capture, so the indicator returns to red for
- * long enough to be seen before the same barcode can arm again.
+ * Free-running mode only, where it is the only thing stopping a code held still from firing every
+ * frame. Confirm mode needs no such guard: arming is idempotent — reading the same barcode again
+ * is a no-op, because it is already the candidate — and the operator's finger sets the pace.
  */
 const REPEAT_GUARD_MS = 1200
 
@@ -134,16 +145,16 @@ export interface ScannerState {
   chooseCamera: (id: string) => void
   toggleTorch: () => void
   /**
-   * In confirm mode: the barcode that has been read and is waiting for `capture()`, or '' when
-   * nothing is readable. Always '' when confirm mode is off.
+   * In confirm mode: the barcode being held, ready for `capture()`. '' until the first read.
+   *
+   * It survives a capture and survives the barcode leaving the frame; only a read of a *different*
+   * barcode replaces it. Always '' when confirm mode is off.
    */
   candidate: string
-  /** True while the camera is live, nothing has gone wrong, and no code is held. */
+  /** True while the camera is live, nothing has gone wrong, and nothing has been read yet. */
   seeking: boolean
-  /** Hands the held code to `onCode`. Does nothing when nothing is held. */
+  /** Records the held code. Can be called repeatedly — each call is one more of that item. */
   capture: () => void
-  /** Throws the held code away — the operator was pointed at the wrong thing. */
-  discard: () => void
 }
 
 /**
@@ -194,46 +205,35 @@ export function useScanner(
   const accept = useCallback((raw: string) => {
     const code = raw.trim()
     if (!code) return
-    const now = Date.now()
-    if (lastHitRef.current.code === code && now - lastHitRef.current.at < REPEAT_GUARD_MS) return
 
     if (confirmRef.current) {
       /*
-       * Already holding something: stay quiet.
-       *
-       * Not "replace it with the newer read" — the operator is reaching for the button, and the
-       * slightest drift of the phone would otherwise swap what they are about to record for
-       * whatever else is on the shelf. Pointing at the wrong item is what `discard` is for.
+       * Arming, not recording. No time guard: reading the barcode already held is a no-op, and a
+       * different one simply takes its place — which is how moving to the next item works without
+       * touching a button. Nothing here can add anything; only `capture` does that.
        */
-      if (candidateRef.current) return
-      lastHitRef.current = { code, at: now }
+      if (candidateRef.current === code) return
       candidateRef.current = code
       setCandidate(code)
       return
     }
 
+    const now = Date.now()
+    if (lastHitRef.current.code === code && now - lastHitRef.current.at < REPEAT_GUARD_MS) return
     lastHitRef.current = { code, at: now }
     onCodeRef.current(code)
   }, [])
 
-  /** Clears the held code and suppresses it briefly, so the indicator visibly resets. */
-  const release = useCallback((): string => {
-    const code = candidateRef.current
-    if (!code) return ''
-    candidateRef.current = ''
-    setCandidate('')
-    lastHitRef.current = { code, at: Date.now() }
-    return code
-  }, [])
-
+  /**
+   * Records the held code, and leaves it held.
+   *
+   * Deliberately repeatable: six identical tins is six taps, with the camera never leaving the
+   * shelf. See the note at the top of this file for why it does not clear.
+   */
   const capture = useCallback(() => {
-    const code = release()
+    const code = candidateRef.current
     if (code) onCodeRef.current(code)
-  }, [release])
-
-  const discard = useCallback(() => {
-    release()
-  }, [release])
+  }, [])
 
   const stop = useCallback(() => {
     liveRef.current = false
@@ -432,6 +432,5 @@ export function useScanner(
     candidate,
     seeking: active && !error && !starting && !candidate,
     capture,
-    discard,
   }
 }

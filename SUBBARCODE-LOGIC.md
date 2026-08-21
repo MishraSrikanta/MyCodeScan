@@ -1,6 +1,6 @@
 # The sub-barcode format
 
-**What to implement in MyStokio.** This document is the whole agreement; the implementation in
+**What to implement in MyStockio.** This document is the whole agreement; the implementation in
 `src/lib/subbarcode.ts` follows it, and `src/lib/subbarcode.test.mts` checks it (4,451
 assertions).
 
@@ -139,7 +139,7 @@ line quantity 3                ← three bags
 total         15 kg
 ```
 
-So MyStokio should multiply, not substitute: `lineQty × parsedQty` is the amount sold. Reading
+So MyStockio should multiply, not substitute: `lineQty × parsedQty` is the amount sold. Reading
 the parsed quantity *as* the line quantity would turn three bags into three kilos.
 
 ---
@@ -191,7 +191,7 @@ function itemRefFor(parent) {
 }
 ```
 
-So MyStokio resolves a label by querying its **own product list**:
+So MyStockio resolves a label by querying its **own product list**:
 
 ```js
 function productForItemRef(itemRef, products) {
@@ -239,7 +239,7 @@ suite asserts this in both directions rather than assuming it.
 
 ---
 
-## Checklist for the MyStokio side
+## Checklist for the MyStockio side
 
 - [ ] `parseSubCode` with the **greedy** leading group, and the `parent.length < 3` guard.
 - [ ] `encodeQty` via `toFixed(3)` + trim, so both apps emit identical codes.

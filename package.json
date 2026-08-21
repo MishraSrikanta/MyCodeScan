@@ -2,7 +2,7 @@
   "name": "mycodescan",
   "private": true,
   "version": "1.0.0",
-  "description": "Barcode scanning companion for MyStokio. Scan on a phone, bill on a PC.",
+  "description": "Barcode scanning companion for MyStockio. Scan on a phone, bill on a PC.",
   "type": "module",
   "scripts": {
     "dev": "vite",

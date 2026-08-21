@@ -1,6 +1,6 @@
 # MyCodeScan
 
-The phone companion to MyStokio. Walk the shop scanning barcodes; the list is waiting at
+The phone companion to MyStockio. Walk the shop scanning barcodes; the list is waiting at
 the billing counter.
 
 **This folder is self-contained.** Its own `package.json` and `node_modules`, sharing
@@ -9,40 +9,44 @@ nothing with the app beside it. Cut or copy the folder anywhere and it still bui
 ```
 mycodescan/
   API-CONTRACT.md        the backend agreement — read-only on purpose
-  SUBBARCODE-LOGIC.md    the sub-barcode format, for the MyStokio side
+  SUBBARCODE-LOGIC.md    the sub-barcode format, for the MyStockio side
   server-reference/      a working backend, zero dependencies
   src/                   the phone app
 ```
 
 ---
 
-## Accounts are MyStokio's
+## Accounts are MyStockio's
 
-There are no MyCodeScan accounts. Sign-in goes to `api/auth/login` and `api/auth/signup`
-— the endpoints MyStokio already uses — so **one account works in both apps**, and tokens
-are kept under the same keys. Serve both from one origin and a single sign-in covers them.
+There are no MyCodeScan accounts, and this app no longer creates them — **it signs in only**.
+Registration is the one action here that writes something permanent and shared: an account made
+in MyCodeScan signs in to MyStockio too, on the same subscription, and a shop's staff standing at
+a shelf with a phone are not the people who should be opening it. Accounts are made in MyStockio.
 
-The login form matches MyStokio's field for field, including the parts that look lax:
+`register()` and `SignupInput` stay in `lib/api.ts` on purpose — they are part of the documented
+client surface for those routes, and deleting them would put the client out of step with
+`API-CONTRACT.md` over a decision about which screens this app happens to show.
 
-- **The identifier is a free-text User ID, not an email.** MyStokio validates nothing in
-  login mode, so an account may be identified by a phone number, a shop code or a name.
-  Enforcing an email pattern here would lock people out of accounts that work there.
-- **Signup checks only that name, identifier and password are non-empty** — no email
-  pattern, no minimum password length. The backend is the authority, and says so through
-  `VALIDATION_FAILED`.
-- **Registration is invite-only**, gated by the same access key. Accounts are shared, so
-  leaving that gate open here would open MyStokio's registration too.
+Sign-in goes to `api/auth/login` — the endpoint MyStockio already uses — so **one account works
+in both apps**, and tokens are kept under the same keys. Serve both from one origin and a single
+sign-in covers them.
+
+**Nothing is validated on the way out.** Whatever is typed is sent as-is, matching MyStockio's own
+`validate()`, which runs no checks in login mode. An account there may be identified by a phone
+number, a shop code or a name, so enforcing an email pattern here would lock people out of
+accounts that work perfectly in MyStockio. The backend is the authority on whether a credential
+is acceptable, and it says so through `VALIDATION_FAILED`.
 
 Paths split by age: **auth is unversioned** because those endpoints already exist, while
 **scans are versioned** at `api/v1/scans` because they are new and their shape may change
 without every phone being updated.
 
-If you already run a backend for MyStokio, only section 5 of `API-CONTRACT.md` is left to
+If you already run a backend for MyStockio, only section 5 of `API-CONTRACT.md` is left to
 build.
 
 There is no guest or demo mode. A scan session belongs to a user and is read back by that
 same user at the counter; an anonymous session could be listed and billed by a stranger
-pointed at the same server. Note also that MyStokio's own client falls back to a
+pointed at the same server. Note also that MyStockio's own client falls back to a
 hard-coded `"demo-token"` when its backend is unreachable — neither app here copies that,
 and the reference server refuses that exact string.
 
@@ -50,11 +54,11 @@ and the reference server refuses that exact string.
 
 1. **On the phone** — sign in, start a scan, point the camera at barcodes. Each scan
    session gets a short ID like `SC-7QK2M`.
-2. **On the PC** — MyStokio → New Sale → **MyCodeScan**. Your sessions are listed. Pick
+2. **On the PC** — MyStockio → New Sale → **MyCodeScan**. Your sessions are listed. Pick
    one and every barcode is added to the bill.
-3. **After the invoice is saved** — MyStokio deletes the session automatically.
+3. **After the invoice is saved** — MyStockio deletes the session automatically.
 
-Three moving parts: this app, a backend, and MyStokio. The backend is the only one you
+Three moving parts: this app, a backend, and MyStockio. The backend is the only one you
 still have to arrange.
 
 ---
@@ -63,7 +67,7 @@ still have to arrange.
 
 A second, separate errand on the same app: **printing** a label for a weighed or cut portion
 of a product, rather than reading one. For the wire sold by the metre and the cashew sold by
-the kilo — where there is one product in MyStokio but what crosses the counter is a 5 kg bag.
+the kilo — where there is one product in MyStockio but what crosses the counter is a 5 kg bag.
 
 Scan the product's own barcode, type how much is in the bag, print. The label carries the
 parent barcode with the quantity added to it:
@@ -103,7 +107,7 @@ to the session *before* the old one is removed: if a request fails halfway, the 
 visible duplicate that can be deleted, not a scanned item that has silently vanished.
 
 **`SUBBARCODE-LOGIC.md` is the format**, written for whoever implements the reading side in
-MyStokio. It includes the one rule that matters — look the whole code up as a product *first*,
+MyStockio. It includes the one rule that matters — look the whole code up as a product *first*,
 parse it as a sub-barcode only if nothing matches — and an EAN-13 fallback for tills whose
 scanners cannot read Code 128.
 
@@ -122,11 +126,11 @@ npm run dev      # this app on :5175
 npm run test:api # check the backend against API-CONTRACT.md
 ```
 
-Then open the app, choose **Create account**, and check the **Server address** reads
-`http://localhost:8787` — just the host, with no path.
+Sign in with an account that already exists in MyStockio — this app cannot create one. The
+backend address is compiled in rather than typed; see `src/lib/config.ts`, where one `ENV`
+constant chooses between the dev and prod bases.
 
-In MyStokio, put that same address in **Settings → Where your data is kept → MyCodeScan
-address**, and sign in from **New Sale → MyCodeScan** with the same account.
+In MyStockio, sign in from **New Sale → MyCodeScan** with the same account.
 
 ### Camera access needs HTTPS
 
@@ -148,13 +152,12 @@ Upload the contents of `dist/` to any static host — Netlify, Vercel, Cloudflar
 GitHub Pages, S3, ordinary shared hosting. `vite.config.ts` sets `base: './'`, so the
 build works from a domain root, a subfolder or a CDN path without rebuilding.
 
-Optionally bake in the API address at build time so nobody has to type it:
+The API address is already baked in, and there is no way to change it at runtime: `src/lib/config.ts`
+holds the two bases and one `ENV` constant that picks between them. Edit that line and rebuild.
 
-```bash
-VITE_API_BASE=https://your-backend.example.com npm run build
-```
-
-A value entered in the app always overrides it.
+That is deliberate rather than unfinished. A host typed into the phone but not into the counter —
+or the other way round — produces two apps that each work perfectly and cannot see each other's
+scans, and the symptom ("no scans waiting") gives no hint of the cause.
 
 ### The backend
 
@@ -217,19 +220,29 @@ the counter picks it out of a list, and somebody in the store room may read it a
 uses Crockford base32 with the vowels removed, so there are no ambiguous characters and no
 accidental words.
 
-**The camera arms; you record.** The viewfinder frame turns **green** when a barcode has been
-read and is being held, **red** when there is nothing readable, and the code is only added when
-you tap **Capture**. This is not caution for its own sake: a decoder reads a barcode *every
-frame it can see one*, thirty times a second, so recording on each read turns one sweep past a
-shelf into a dozen of the same item — silently, with nothing to notice but a quantity that no
-longer matches the basket. A time-based guard cannot fix that, because no interval both stops
-runaway counting and still lets somebody deliberately scan the same tin twice. Separating
-reading from recording does.
+**The camera arms; you record.** The viewfinder frame turns **green** when a barcode is held
+and ready, **red** when nothing has been read, and the code is added only when you tap the button
+beneath it. This is not caution for its own sake: a decoder reads a barcode *every frame it can
+see one*, thirty times a second, so recording on each read turns one sweep past a shelf into a
+dozen of the same item — silently, with nothing to notice but a quantity that no longer matches
+the basket. A time-based guard cannot fix that, because no interval both stops runaway counting
+and still lets somebody deliberately scan the same tin twice. Separating reading from recording
+does.
+
+**The button stays armed, and adding is the only thing it does.** Six identical tins is six taps,
+camera still pointed at the shelf. Moving to the next item needs no button at all — aiming at a
+different barcode swaps what the button will add. There is nothing to dismiss and nothing to
+reopen, because leaving and re-entering the camera once per item is the slow version of the same
+work.
+
+The cost is real and worth knowing: point the camera at nothing and the last code is still armed,
+so a stray tap adds another of it. That is why the button carries the code it will add rather than
+the word "Capture" alone.
 
 Typing a barcode by hand skips the confirmation, because typing it *is* the confirmation.
 
-**Capturing the same barcode twice counts two.** Six identical tins is one line of six, not
-six lines.
+**Adding the same barcode twice counts two.** Six identical tins is one line of six, not six
+lines.
 
 **A scan nobody put anything into is deleted on the way out.** The session is created on the
 server the moment "Start a new scan" is tapped, and it has to be — the operator taps it at the
@@ -263,10 +276,10 @@ the sort of thing that works on the machine it was tested on.
 
 This backend holds barcode strings and quantities, nothing else. It has no product
 catalogue, no prices, no customers and no invoices, and it never will — matching barcodes
-to products happens inside MyStokio, on the shop's own machine, against the shop's own
+to products happens inside MyStockio, on the shop's own machine, against the shop's own
 workbook.
 
-That boundary is the point. MyStokio's promise is that shop data stays with the shop; a
+That boundary is the point. MyStockio's promise is that shop data stays with the shop; a
 list of barcode numbers is not shop data in any meaningful sense, while a product list
 with cost prices would be.
 

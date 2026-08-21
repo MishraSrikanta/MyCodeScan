@@ -1,9 +1,9 @@
 /**
  * Backend address and endpoint paths.
  *
- * A deliberate copy of the shape of MyStokio's `src/api/config.ts`, because it is the same
+ * A deliberate copy of the shape of MyStockio's `src/api/config.ts`, because it is the same
  * backend and the same accounts. Two bases, one manual switch, and an endpoint enum whose
- * auth entries are identical to MyStokio's.
+ * auth entries are identical to MyStockio's.
  *
  * ── Endpoint shapes come from the accountAuthRoutes router ────────────────────
  * Mounted at `/api/v1/auth`, so every auth path carries that prefix. Login takes an
@@ -42,7 +42,7 @@ export function apiBase(): string {
 /**
  * Endpoint paths, relative to `apiBase()`.
  *
- * LOGIN and REGISTER are MyStokio's own values, unchanged — the whole point is that both
+ * LOGIN and REGISTER are MyStockio's own values, unchanged — the whole point is that both
  * apps call the same two endpoints, so one account works in both.
  *
  * The rest are added here. Note the split: auth is unversioned because those endpoints
@@ -91,7 +91,7 @@ export function getApiUrl(endpoint: APIEndpoint | string): string {
 }
 
 /**
- * Token storage keys — MyStokio's own, from its `AUTH_STORAGE`.
+ * Token storage keys — MyStockio's own, from its `AUTH_STORAGE`.
  *
  * Shared on purpose: serve both apps from one origin and a single sign-in covers them.
  */
@@ -101,9 +101,9 @@ export const AUTH_STORAGE = {
 } as const
 
 /**
- * The token MyStokio's demo fallback manufactures when its backend is unreachable.
+ * The token MyStockio's demo fallback manufactures when its backend is unreachable.
  *
- * Treated as no token at all wherever it appears. MyStokio's `loginRequest` returns this
+ * Treated as no token at all wherever it appears. MyStockio's `loginRequest` returns this
  * literal string whenever the real endpoint fails and the fields are merely non-empty, so
  * it genuinely turns up in shared storage. Sending it would produce a puzzling 401 about
  * scans; recognising it means asking for a real sign-in instead.

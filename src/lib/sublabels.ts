@@ -96,7 +96,7 @@ export function listLabels(): SubLabel[] {
 /**
  * The saved label for a six-digit in-store reference, if there is one.
  *
- * The reverse of the squeeze the EAN-13 format performs. MyStokio does this against its own
+ * The reverse of the squeeze the EAN-13 format performs. MyStockio does this against its own
  * product list; here there is no product list, so the only source is labels printed on this
  * device.
  */
@@ -112,7 +112,7 @@ export function findByItemRef(itemRef: string): SubLabel | null {
  * it found first. Uncommon, silent, and worth a hard stop at print time — which is the only
  * moment somebody is present to resolve it.
  *
- * This can only see labels printed on this device. MyStokio can do better, because it has the
+ * This can only see labels printed on this device. MyStockio can do better, because it has the
  * whole product list; SUBBARCODE-LOGIC.md gives the query.
  */
 export function itemRefClash(parent: string, itemRef: string): SubLabel | null {
