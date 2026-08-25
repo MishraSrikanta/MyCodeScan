@@ -229,20 +229,26 @@ the basket. A time-based guard cannot fix that, because no interval both stops r
 and still lets somebody deliberately scan the same tin twice. Separating reading from recording
 does.
 
-**The button stays armed, and adding is the only thing it does.** Six identical tins is six taps,
-camera still pointed at the shelf. Moving to the next item needs no button at all — aiming at a
-different barcode swaps what the button will add. There is nothing to dismiss and nothing to
-reopen, because leaving and re-entering the camera once per item is the slow version of the same
-work.
+**Green is a live reading, not a memory.** It goes out when the camera looks away, and a capture
+puts it out deliberately before it can come back. Both matter, because the button carries the code
+it is about to add and that has to be trustworthy. The two rules — a short cooldown after every
+capture, and dropping a code nothing has read for most of a second — are the whole of it, and they
+have their own suite (`npm run test:arming`) because this behaviour has been got subtly wrong more
+than once and every failure was a timing failure.
 
-The cost is real and worth knowing: point the camera at nothing and the last code is still armed,
-so a stray tap adds another of it. That is why the button carries the code it will add rather than
-the word "Capture" alone.
+**Every scan is a new item unless you say otherwise.** Scanning a barcode already on the list does
+not silently add another; it asks. The two things a repeat can mean look identical from the app's
+side — a second tin genuinely being counted, and a barcode read twice because you lost track —
+and guessing wrong either inflates a count or loses a sale, neither of them recoverable later,
+because nothing on the shelf records which happened. Worth one tap to know.
 
-Typing a barcode by hand skips the confirmation, because typing it *is* the confirmation.
+For a bulk count the +/− stepper on the line is still the fast path: tapping + eight times beats
+answering the same question eight times.
 
-**Adding the same barcode twice counts two.** Six identical tins is one line of six, not six
-lines.
+Typing a barcode by hand skips the capture confirmation, because typing it *is* the confirmation —
+but it still goes through the duplicate question.
+
+**A line counts units, not scans.** Six identical tins is one line of six, not six lines.
 
 **A scan nobody put anything into is deleted on the way out.** The session is created on the
 server the moment "Start a new scan" is tapped, and it has to be — the operator taps it at the

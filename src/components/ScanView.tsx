@@ -9,16 +9,26 @@
  * A decoder reads a barcode every frame it can see one, so a handler fired on each read turns one
  * sweep past a shelf into a dozen of the same item — silently, with nothing to notice but a
  * quantity that no longer matches the basket. So the viewfinder frame goes **green** when a
- * barcode is held and ready, **red** when nothing has been read, and the code is added only when
- * the button beneath it is tapped.
+ * barcode is being read, **red** when there is none, and the code is added only when the button
+ * beneath it is tapped.
  *
- * **The button stays armed, and adding is the only thing it does.** Six identical tins is six
- * taps, camera still pointed at the shelf; the next item needs no button at all, because aiming at
- * a different barcode swaps what the button will add. There is nothing to dismiss and nothing to
- * reopen, which is the whole point — the alternative is leaving and re-entering the camera once
- * per item.
+ * Green is a live reading, not a memory: it goes out the moment the camera looks away, and a
+ * capture puts it out deliberately before it can come back. Both matter, because the button
+ * carries the code it is about to add and the operator has to be able to trust that. See
+ * lib/useScanner.ts.
  *
- * Typing a barcode by hand skips the confirmation: typing it *is* the confirmation.
+ * ── Every scan is a new item, unless you say otherwise ───────────────────────
+ * Scanning a barcode already on the list does not silently add another. It asks, because the two
+ * things a repeat can mean look identical from here: a second tin genuinely being counted, and a
+ * barcode read twice because the operator lost track. Guessing the first inflates a count;
+ * guessing the second loses a sale. Neither is recoverable later — nothing on the shelf records
+ * which happened — so it is worth one tap to know.
+ *
+ * For a bulk count the stepper on the line is still the fast path: tapping + eight times beats
+ * answering the same question eight times.
+ *
+ * Typing a barcode by hand skips the *capture* confirmation, because typing it is the
+ * confirmation — but it still goes through the duplicate question.
  *
  * ── Each captured scan saves itself ──────────────────────────────────────────
  * Once captured, a barcode is queued locally and sent immediately. There is nothing further to
@@ -139,6 +149,20 @@ export function ScanView({
   const [flash, setFlash] = useState('')
   const flashTimer = useRef<number | null>(null)
 
+  /**
+   * A barcode already on the list, waiting for the operator to say whether it is a second one.
+   *
+   * `qty` is captured when the question is asked rather than read live, so the dialog states the
+   * count the operator was actually looking at when they scanned.
+   */
+  const [duplicate, setDuplicate] = useState<{ barcode: string; qty: number } | null>(null)
+
+  /* The list as the scanner's long-lived callback needs to see it — see `onCode`. */
+  const linesRef = useRef<Line[]>([])
+  useEffect(() => {
+    linesRef.current = lines
+  }, [lines])
+
   /* ------------------------------------------------------- custom piece state */
   /** The barcode of the line whose custom-piece editor is open, or '' for none. */
   const [customFor, setCustomFor] = useState('')
@@ -220,8 +244,10 @@ export function ScanView({
     }
   }, [scanId, refreshPending])
 
-  /** A barcode was read — from the camera or typed. */
-  const onCode = useCallback(
+  /**
+   * Records one of a barcode. No questions asked — the asking happens in `onCode`.
+   */
+  const record = useCallback(
     (barcode: string) => {
       setLastCode(barcode)
 
@@ -250,6 +276,32 @@ export function ScanView({
       void sync()
     },
     [scanId, sync, refreshPending],
+  )
+
+  /**
+   * A barcode arrived — from the Add button or typed in.
+   *
+   * Every scan is treated as a *new* item unless it is already on the list, in which case it stops
+   * here and asks. The reason is that the two things a repeat can mean look identical from here:
+   * a second tin genuinely being counted, and a barcode read twice because the operator lost track
+   * of what they had already done. Guessing the first quietly inflates a count; guessing the second
+   * quietly loses a sale. Neither is recoverable later, because nothing on the shelf records which
+   * happened — so it is worth one tap to know.
+   *
+   * The list is read through a ref: this callback is handed to `useScanner`, which holds it for the
+   * life of the camera, and closing over `lines` would compare against whatever the list held when
+   * the camera opened.
+   */
+  const onCode = useCallback(
+    (barcode: string) => {
+      const existing = linesRef.current.find((line) => line.barcode === barcode)
+      if (existing) {
+        setDuplicate({ barcode, qty: existing.qty })
+        return
+      }
+      record(barcode)
+    },
+    [record],
   )
 
   useEffect(
@@ -534,7 +586,7 @@ export function ScanView({
                 camera.candidate ? 'bg-emerald-500 text-white' : 'bg-rose-500/90 text-white'
               }`}
             >
-              {camera.candidate ? 'Ready — tap to add, again for another' : 'No barcode readable'}
+              {camera.candidate ? 'Ready — tap to add' : 'No barcode readable'}
             </p>
           </>
         )}
@@ -570,18 +622,12 @@ export function ScanView({
       {/* --------------------------------------------------------- controls */}
       <div className="shrink-0 space-y-2 px-3 pt-2.5">
         {/*
-            Capture is the primary action on this screen and sits directly under the viewfinder,
-            where a thumb already is.
+            The primary action, directly under the viewfinder where a thumb already is.
 
-            One button, full width, and it stays armed after a press: six identical tins is six
-            taps without the camera ever leaving the shelf. There is nothing to dismiss and nothing
-            to reopen — aiming at a different barcode swaps what the button will add. Disabled
-            rather than hidden before the first read, because a button that appears and disappears
+            One button, full width, and it carries the code it will add — the operator should be
+            reading the number they are about to record, not the word "Capture". Disabled rather
+            than hidden when there is nothing to add, because a button that appears and disappears
             is a button that gets mis-tapped.
-
-            It carries the code it will record. That is not decoration: because the candidate
-            survives the barcode leaving the frame, the label is the only thing standing between a
-            stray tap and an extra item.
         */}
         <button
           onClick={camera.capture}
@@ -683,6 +729,46 @@ export function ScanView({
         )}
       </div>
 
+      {/* -------------------------------------------------------- duplicate */}
+      {duplicate && (
+        /* A real dialog rather than `window.confirm`: the native one is a different size and shape
+           on every phone, cannot be styled to show a barcode legibly, and on some Android browsers
+           steals focus from the camera in a way it does not give back. */
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="duplicate-title"
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:items-center"
+        >
+          <div className="w-full max-w-sm rounded-2xl border border-white/15 bg-ink p-4 shadow-2xl">
+            <p id="duplicate-title" className="text-[16px] font-bold">
+              Already scanned
+            </p>
+            <p className="mt-1 break-all font-mono text-[13.5px] text-brand-400">{duplicate.barcode}</p>
+            <p className="mt-2 text-[13.5px] leading-relaxed text-white/65">
+              This is on the list with {duplicate.qty} {duplicate.qty === 1 ? 'unit' : 'units'}. Add
+              another one?
+            </p>
+
+            <div className="mt-4 flex gap-2">
+              <button onClick={() => setDuplicate(null)} className="btn-ghost flex-1">
+                No
+              </button>
+              <button
+                onClick={() => {
+                  record(duplicate.barcode)
+                  setDuplicate(null)
+                }}
+                className="btn-primary flex-1"
+              >
+                <Plus className="h-4 w-4" />
+                Yes, make it {duplicate.qty + 1}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ------------------------------------------------------------ items */}
       <div className="mt-2 flex min-h-0 flex-1 flex-col border-t border-white/10">
         <p className="shrink-0 px-4 pb-1 pt-2 text-[11px] font-bold uppercase tracking-wider text-white/40">
@@ -695,8 +781,8 @@ export function ScanView({
                 <ScanBarcode className="mx-auto h-7 w-7 text-white/20" />
                 <p className="mt-2 text-[13.5px] font-semibold text-white/60">Nothing scanned yet</p>
                 <p className="mt-1 text-[12px] leading-relaxed text-white/35">
-                  Point the camera at a barcode. The frame turns green when it has been read — then
-                  tap the button below to add it. Tap again for another of the same.
+                  Point the camera at a barcode. The frame turns green while one is being read — then
+                  tap the button below to add it.
                 </p>
               </div>
             </div>

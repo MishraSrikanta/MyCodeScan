@@ -37,24 +37,31 @@
  *   · **seeking** — nothing has been read yet. `candidate` is ''.
  *   · **armed** — a barcode is held and ready. `candidate` is that code.
  *
- * ── The candidate stays armed after a capture ────────────────────────────────
- * `capture()` does *not* clear it, and there is no discard. That is what makes counting fast: six
- * identical tins is six taps of one button, with the camera never leaving the shelf. Clearing on
- * capture would mean re-aiming at the same barcode between every tin and waiting out a repeat
- * guard each time — the slow, fiddly version of exactly the same work.
+ * ── The light has to be able to go out ───────────────────────────────────────
+ * Green means "there is a barcode in front of the camera right now". For that to be worth
+ * anything, two things have to clear it, and an earlier version of this file did neither:
  *
- * The candidate is replaced when a *different* barcode is read, so moving to the next item needs
- * no button at all. It is never cleared by the barcode merely leaving the frame: the operator's
- * thumb is on the button, not on the phone's aim, and greying it out mid-sequence would break the
- * run of taps it exists to support.
+ *   · **Capture.** `capture()` clears the candidate, and `CAPTURE_COOLDOWN_MS` keeps arming shut
+ *     off for long enough afterwards that the red is actually seen. Without the cooldown the same
+ *     barcode, still sitting in frame, re-arms in the very next frame and the button looks as
+ *     though it did nothing at all.
  *
- * The cost, and it is real: point the camera at nothing and the last code is still armed, so a
- * stray tap adds another of it. That is why the button carries the code it will record rather than
- * the word "Capture" alone — the operator is looking at the thing they are about to add.
+ *   · **Looking away.** The decoders only ever report *success*, so nothing tells us a barcode has
+ *     left the frame — we have to notice that no read has arrived for `CANDIDATE_STALE_MS` and
+ *     drop the candidate ourselves. A green light that stays green while the camera points at the
+ *     floor is worse than no light: it is a light that lies, and the operator stops trusting it.
+ *
+ * Between them, green is only ever on when a barcode is genuinely being read, which is what makes
+ * it safe for the button to carry the code it is about to add.
+ *
+ * Repeats are not the scanner's problem. Reading the same barcode twice arms it twice, and what
+ * to do about that — refuse it, ask, count it — belongs to whoever owns the list. See ScanView.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { IScannerControls } from '@zxing/browser'
+/* The green light's timing rules live apart from the camera, so they can be tested. */
+import { CAPTURE_COOLDOWN_MS, armAction, isStale } from './arming'
 
 /** The formats a shop actually prints or receives. */
 const FORMATS = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'itf', 'codabar', 'qr_code']
@@ -145,15 +152,16 @@ export interface ScannerState {
   chooseCamera: (id: string) => void
   toggleTorch: () => void
   /**
-   * In confirm mode: the barcode being held, ready for `capture()`. '' until the first read.
+   * In confirm mode: the barcode in front of the camera right now, ready for `capture()`.
    *
-   * It survives a capture and survives the barcode leaving the frame; only a read of a *different*
-   * barcode replaces it. Always '' when confirm mode is off.
+   * '' whenever there is nothing — before the first read, for a moment after a capture, and once
+   * the barcode has left the frame. A different barcode replaces it. Always '' when confirm mode
+   * is off.
    */
   candidate: string
-  /** True while the camera is live, nothing has gone wrong, and nothing has been read yet. */
+  /** True while the camera is live, nothing has gone wrong, and no barcode is being read. */
   seeking: boolean
-  /** Records the held code. Can be called repeatedly — each call is one more of that item. */
+  /** Records the held code and drops it, so the light goes back to red. */
   capture: () => void
 }
 
@@ -193,6 +201,10 @@ export function useScanner(
 
   const candidateRef = useRef('')
   const [candidate, setCandidate] = useState('')
+  /** When a decode last succeeded, so a candidate nobody is still reading can be dropped. */
+  const lastSeenRef = useRef(0)
+  /** Arming is refused until this moment. Set by `capture`, so the red is visible. */
+  const armAgainAtRef = useRef(0)
 
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState('')
@@ -207,12 +219,17 @@ export function useScanner(
     if (!code) return
 
     if (confirmRef.current) {
-      /*
-       * Arming, not recording. No time guard: reading the barcode already held is a no-op, and a
-       * different one simply takes its place — which is how moving to the next item works without
-       * touching a button. Nothing here can add anything; only `capture` does that.
-       */
-      if (candidateRef.current === code) return
+      /* Arming, not recording. Nothing here can add anything; only `capture` does that. */
+      const at = Date.now()
+      const action = armAction({ code, at }, { candidate: candidateRef.current, armAgainAt: armAgainAtRef.current })
+      if (action === 'cooling-down') return
+
+      /* Stamped on a re-read as well as a new one: that is what tells the staleness sweeper the
+         barcode is still in front of the camera rather than merely once having been. */
+      lastSeenRef.current = at
+      if (action === 'still-there') return
+
+      /* A different barcode simply takes its place, so moving to the next item needs no button. */
       candidateRef.current = code
       setCandidate(code)
       return
@@ -225,15 +242,42 @@ export function useScanner(
   }, [])
 
   /**
-   * Records the held code, and leaves it held.
+   * Records the held code and drops it, so the light goes red.
    *
-   * Deliberately repeatable: six identical tins is six taps, with the camera never leaving the
-   * shelf. See the note at the top of this file for why it does not clear.
+   * The cooldown is the part that matters. Clearing alone is not enough — the barcode is usually
+   * still in frame, so the very next decoded frame would re-arm it and the operator would see no
+   * change at all. Holding arming off for `CAPTURE_COOLDOWN_MS` makes the capture visible.
    */
   const capture = useCallback(() => {
     const code = candidateRef.current
-    if (code) onCodeRef.current(code)
+    if (!code) return
+    candidateRef.current = ''
+    setCandidate('')
+    armAgainAtRef.current = Date.now() + CAPTURE_COOLDOWN_MS
+    onCodeRef.current(code)
   }, [])
+
+  /*
+   * Drop a candidate nobody is reading any more.
+   *
+   * A poll rather than something event-driven, because there is no event to hang it on: both
+   * decoders report successes and say nothing at all about a frame with no barcode in it. The only
+   * available signal is the *absence* of reads, which has to be noticed by looking.
+   *
+   * A quarter-second tick against an 800 ms threshold, so the light goes out somewhere between 0.8
+   * and 1.05 seconds after the barcode leaves the frame. Cheap: a comparison of two numbers, and it
+   * only ever runs while a camera is open in confirm mode.
+   */
+  useEffect(() => {
+    if (!active || !confirm) return
+    const timer = window.setInterval(() => {
+      const state = { candidate: candidateRef.current, armAgainAt: armAgainAtRef.current }
+      if (!isStale(state, lastSeenRef.current, Date.now())) return
+      candidateRef.current = ''
+      setCandidate('')
+    }, 250)
+    return () => window.clearInterval(timer)
+  }, [active, confirm])
 
   const stop = useCallback(() => {
     liveRef.current = false
@@ -249,6 +293,8 @@ export function useScanner(
        Capture button for something the closed camera saw a minute ago. */
     candidateRef.current = ''
     setCandidate('')
+    lastSeenRef.current = 0
+    armAgainAtRef.current = 0
   }, [])
 
   useEffect(() => {
