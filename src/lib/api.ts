@@ -124,6 +124,14 @@ export interface ScanSummary {
   totalQty: number
   createdAt: string
   updatedAt: string
+  /**
+   * The customer this scan is for, as digits.
+   *
+   * Optional because the backend does not carry it yet — see CUSTOMER-MOBILE-BACKEND.md. Until it
+   * does, this is simply absent from every response, and everything that reads it is written to
+   * expect that. Once the field ships, the same client starts showing it with no change here.
+   */
+  customerMobile?: string
 }
 
 export interface Scan extends ScanSummary {
@@ -464,11 +472,58 @@ export async function getScan(scanId: string): Promise<Scan> {
   return request<Scan>('GET', `${APIEndpoint.SCANS}/${encodeURIComponent(scanId)}`)
 }
 
-export async function updateScan(
-  scanId: string,
-  patch: { label?: string; status?: 'open' | 'ready' },
-): Promise<Scan> {
-  return request<Scan>('PATCH', `${APIEndpoint.SCANS}/${encodeURIComponent(scanId)}`, patch)
+/** What a PATCH may change. Every field optional; only what is sent is touched. */
+export interface ScanPatch {
+  label?: string
+  status?: 'open' | 'ready'
+  /** Digits only, or '' to clear it. Ignored by a backend that does not know the field yet. */
+  customerMobile?: string
+}
+
+/**
+ * Updates a scan.
+ *
+ * ── Sending a field the backend may not have ────────────────────────────────
+ * `customerMobile` is new and the deployed backend does not store it yet. Two things follow.
+ *
+ * A backend that ignores unknown fields — the reference server does, and most hand-written
+ * Express handlers do — takes the rest of the patch and drops this one. Nothing breaks, and the
+ * day the field ships the number simply starts being kept.
+ *
+ * A backend with a *strict* validator instead answers 400. That would be a Done button that fails
+ * for everybody until the server catches up, over an optional convenience — so a 400 is retried
+ * once without the field. The scan is still marked ready, which is the part that matters, and the
+ * caller is told the number did not stick rather than being let believe it did.
+ */
+export async function updateScan(scanId: string, patch: ScanPatch): Promise<Scan> {
+  const path = `${APIEndpoint.SCANS}/${encodeURIComponent(scanId)}`
+  try {
+    return await request<Scan>('PATCH', path, patch)
+  } catch (caught) {
+    const failed = caught as ApiError
+    const optional = patch.customerMobile !== undefined
+    if (!optional || failed.status !== 400) throw failed
+
+    const { customerMobile, ...rest } = patch
+    void customerMobile
+    const scan = await request<Scan>('PATCH', path, rest)
+    /* Reported, not swallowed: the scan saved but the number did not, and only the caller can
+       decide whether that is worth saying out loud. */
+    throw new CustomerMobileUnsupported(scan)
+  }
+}
+
+/**
+ * Thrown when a scan saved but the customer's number could not be attached.
+ *
+ * Carries the scan, because the update *did* happen — the caller should treat this as a success
+ * with a caveat, not as a failure to retry.
+ */
+export class CustomerMobileUnsupported extends Error {
+  constructor(readonly scan: Scan) {
+    super('The scan was saved, but this backend does not store a customer mobile number yet.')
+    this.name = 'CustomerMobileUnsupported'
+  }
 }
 
 export async function deleteScan(scanId: string): Promise<void> {

@@ -10,6 +10,7 @@ nothing with the app beside it. Cut or copy the folder anywhere and it still bui
 mycodescan/
   API-CONTRACT.md        the backend agreement — read-only on purpose
   SUBBARCODE-LOGIC.md    the sub-barcode format, for the MyStockio side
+  CUSTOMER-MOBILE-BACKEND.md   the one backend change the phone is waiting on
   server-reference/      a working backend, zero dependencies
   src/                   the phone app
 ```
@@ -151,6 +152,28 @@ npm run build     # -> dist/
 Upload the contents of `dist/` to any static host — Netlify, Vercel, Cloudflare Pages,
 GitHub Pages, S3, ordinary shared hosting. `vite.config.ts` sets `base: './'`, so the
 build works from a domain root, a subfolder or a CDN path without rebuilding.
+
+On Vercel there is nothing to configure: Vite is auto-detected, the build command is `npm run build`
+and the output directory is `dist`. The one setting that matters is **Root Directory** — point it at
+this folder if it sits inside a larger repository, or the build runs in the wrong place.
+
+### The build is the gate
+
+`npm run build` is `tsc --noEmit && vite build`, so **a type error fails a deployment**, not just a
+local command. Two things follow from that, and both are already in place:
+
+- **Test suites are excluded from the app's typecheck.** They live under `src` beside what they
+  test, but they are node programs — `node:fs`, `node:child_process`, `process` — and the app
+  config has no types for those, deliberately, so that `process.env` cannot be reached from a React
+  component and be `undefined` on a phone. Left in, they failed every build. They are still
+  typechecked, by `tsconfig.test.json`, just not by the config that gates shipping.
+
+- **Run `npm test` before pushing.** It now starts with both typechecks, so the thing that would
+  break the deployment breaks the test run first, where it is cheap.
+
+Worth knowing if you develop on Windows and deploy to Vercel: the builder is Linux and its
+filesystem is case-sensitive, so `import './scanView'` resolves locally and 404s in CI. Nothing in
+`src` currently has that problem.
 
 The API address is already baked in, and there is no way to change it at runtime: `src/lib/config.ts`
 holds the two bases and one `ENV` constant that picks between them. Edit that line and rebuild.

@@ -1,11 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": [
-      "ES2022",
-      "DOM",
-      "DOM.Iterable"
-    ],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
@@ -20,24 +16,22 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
-    "types": [
-      "vite/client",
-      "node"
-    ],
+    "types": ["vite/client"],
     "baseUrl": ".",
-    "paths": {
-      "@/*": [
-        "src/*"
-      ]
-    }
+    "paths": { "@/*": ["src/*"] }
   },
-  "include": [
-    "src",
-    "vite.config.ts"
-  ],
-  "exclude": [
-    "**/*.test.ts",
-    "**/*.test.mts",
-    "**/*.test.tsx"
-  ]
+  "include": ["src", "vite.config.ts"],
+  /*
+   * The test suites are excluded, and this is what keeps `npm run build` — and therefore every
+   * deployment — from failing.
+   *
+   * They live under `src` so they sit beside what they test, but they are node programs: they
+   * import `node:fs` and `node:child_process` and use `process`, none of which this config has
+   * types for, because the app must not be able to reach them either. Left in, they produced eight
+   * errors on every `tsc --noEmit`, which is the first half of the build script.
+   *
+   * They are still typechecked — see tsconfig.test.json and `npm run typecheck:test` — just not by
+   * the config that gates shipping the app.
+   */
+  "exclude": ["src/**/*.test.mts"]
 }

@@ -30,6 +30,22 @@
  * Typing a barcode by hand skips the *capture* confirmation, because typing it is the
  * confirmation — but it still goes through the duplicate question.
  *
+ * ── Done asks whose scan it is ───────────────────────────────────────────────
+ * Finishing opens one question: the customer's mobile number. A shop runs several scans at once,
+ * one per customer at the counter, and `SC-7QK2M` cannot tell a biller whose is whose — but a
+ * mobile number can, because the customer already gave it and the biller already has it.
+ *
+ * It is asked *here*, at Done, rather than offered as a field somewhere on the screen. Two reasons.
+ * The end of a scan is the one moment the operator is not holding a phone at a shelf, so it is the
+ * only point in the job where typing is free. And it is the moment the number is actually known —
+ * on a picked order the customer is often not identified until the basket is finished.
+ *
+ * Skipping is one tap and costs nothing. A scan with no number behaves exactly as it always did.
+ *
+ * The number goes to the server as its own field, not smuggled into the label. That needs a small
+ * backend change, which has not shipped yet — see CUSTOMER-MOBILE-BACKEND.md for exactly what, and
+ * lib/api.ts for how this stays working until it does.
+ *
  * ── Each captured scan saves itself ──────────────────────────────────────────
  * Once captured, a barcode is queued locally and sent immediately. There is nothing further to
  * press and nothing to remember: by the time the operator has moved to the next shelf, the item
@@ -68,6 +84,7 @@ import {
   Keyboard,
   Loader2,
   Minus,
+  Phone,
   Plus,
   Scale,
   ScanBarcode,
@@ -79,7 +96,15 @@ import {
   ZapOff,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { type Scan, addItem, getScan, removeItem, setItemQty, updateScan } from '../lib/api'
+import {
+  type Scan,
+  CustomerMobileUnsupported,
+  addItem,
+  getScan,
+  removeItem,
+  setItemQty,
+  updateScan,
+} from '../lib/api'
 import { enqueue, flush, queueLength } from '../lib/queue'
 import {
   DECIMAL_MARK,
@@ -143,6 +168,12 @@ export function ScanView({
   const [manual, setManual] = useState('')
   const [showManual, setShowManual] = useState(false)
   const [savingStatus, setSavingStatus] = useState(false)
+
+  /* The Done question: open, and what has been typed into it. */
+  const [finishing, setFinishing] = useState(false)
+  const [customerMobile, setCustomerMobile] = useState('')
+  /* Set when the scan saved but the backend would not take the number, so the operator is told. */
+  const [mobileNotKept, setMobileNotKept] = useState(false)
 
   /* The newest line is highlighted briefly, so a scan is visibly acknowledged even when the
      beep cannot be heard over a shop. */
@@ -470,26 +501,62 @@ export function ScanView({
     }
   }
 
-  /**
+/**
    * Marks the session done and returns to the list.
    *
    * An empty session is not marked ready — it is left for the shell to delete. A *ready* scan with
    * nothing in it is worse than no scan at all: it sits at the top of the list at the counter
    * looking like work that is waiting, and somebody picks it and gets nothing.
+   *
+   * `mobile` is whatever the Done question collected, digits only. Sent only when there is one, so
+   * a skipped question produces exactly the request this always sent.
    */
-  const finish = async () => {
+  const finish = async (mobile: string) => {
     setSavingStatus(true)
     setError('')
+    setMobileNotKept(false)
     try {
       await flush()
       refreshPending()
-      if (!empty) await updateScan(scanId, { status: 'ready', label })
+      if (!empty) {
+        await updateScan(scanId, {
+          status: 'ready',
+          label,
+          ...(mobile ? { customerMobile: mobile } : {}),
+        })
+      }
       onBack()
     } catch (caught) {
+      if (caught instanceof CustomerMobileUnsupported) {
+        /*
+         * The scan is saved and marked ready; only the number was refused. Staying on the screen to
+         * say so, rather than leaving silently, because the operator asked a customer for that
+         * number and should know it did not stick.
+         */
+        setScan(caught.scan)
+        setFinishing(false)
+        setMobileNotKept(true)
+        return
+      }
       setError((caught as Error).message)
     } finally {
       setSavingStatus(false)
     }
+  }
+
+  /**
+   * What the Done button does.
+   *
+   * An empty scan skips the question entirely — there is nothing to attribute to anybody, and the
+   * scan is about to be discarded rather than saved.
+   */
+  const onDone = () => {
+    if (empty) {
+      void finish('')
+      return
+    }
+    setMobileNotKept(false)
+    setFinishing(true)
   }
 
   const totalUnits = lines.reduce((sum, line) => sum + line.qty, 0)
@@ -523,7 +590,7 @@ export function ScanView({
             "Done" and then silently deleting the session would be a small lie about a destructive
             action, even a harmless one. */}
         <button
-          onClick={() => void finish()}
+          onClick={onDone}
           disabled={savingStatus}
           className={`btn shrink-0 px-3 text-sm ${empty ? 'bg-white/10 text-white' : 'bg-brand-500 text-white hover:bg-brand-600'}`}
         >
@@ -728,6 +795,85 @@ export function ScanView({
           </p>
         )}
       </div>
+
+      {/* ------------------------------------------------- mobile not kept */}
+      {mobileNotKept && (
+        <div className="mx-3 mb-2 flex items-start gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 p-2.5 text-[12.5px] leading-relaxed">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
+          <span className="min-w-0 flex-1">
+            <strong>{scanId} is saved and ready</strong>, but this backend does not store a customer
+            mobile number yet, so that part was not kept. See CUSTOMER-MOBILE-BACKEND.md.
+          </span>
+          <button onClick={() => setMobileNotKept(false)} aria-label="Dismiss" className="shrink-0 text-white/40">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------ finish */}
+      {finishing && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="finish-title"
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:items-center"
+        >
+          <div className="w-full max-w-sm rounded-2xl border border-white/15 bg-ink p-4 shadow-2xl">
+            <p id="finish-title" className="text-[16px] font-bold">
+              Whose scan is this?
+            </p>
+            <p className="mt-1 text-[13px] leading-relaxed text-white/55">
+              The customer's mobile number, so the biller can find this basket at the counter.
+              Optional.
+            </p>
+
+            <div className="relative mt-3">
+              <Phone className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/35" />
+              <input
+                autoFocus
+                value={customerMobile}
+                /* Digits only, so the same customer typed two ways is one customer to anything that
+                   later filters by this number. */
+                onChange={(event) => setCustomerMobile(event.target.value.replace(/\D/g, '').slice(0, 15))}
+                placeholder="Customer mobile"
+                inputMode="numeric"
+                autoComplete="tel"
+                aria-label="Customer mobile number"
+                className="field pl-9 font-mono"
+              />
+            </div>
+
+            <p className="mt-2 text-[11.5px] leading-relaxed text-white/35">
+              {scanId} does not change. The number is saved alongside it.
+            </p>
+
+            <div className="mt-4 flex gap-2">
+              {/* Skip is a real, equal option rather than a link in the corner: most scans in most
+                  shops have no customer attached, and making that the awkward path would have
+                  people typing rubbish to get past the question. */}
+              <button
+                onClick={() => void finish('')}
+                disabled={savingStatus}
+                className="btn-ghost flex-1"
+              >
+                Skip
+              </button>
+              <button
+                onClick={() => void finish(customerMobile)}
+                disabled={savingStatus}
+                className="btn-primary flex-1"
+              >
+                {savingStatus ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="h-4 w-4" />
+                )}
+                Finish
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* -------------------------------------------------------- duplicate */}
       {duplicate && (

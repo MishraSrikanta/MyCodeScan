@@ -1,0 +1,28 @@
+{
+  /*
+   * Typechecking for the test files, which the app's own tsconfig deliberately excludes.
+   *
+   * Why they need a config of their own: the suites run on node and use `node:fs`,
+   * `node:child_process` and `process`, none of which exist in a browser. Adding `"node"` to the
+   * app's `types` would make those globals visible to `src/components` as well — and the first
+   * time somebody reaches for `process.env` in a React component, it compiles cleanly here and is
+   * `undefined` on a phone. Two configs keeps the app honest about what it can actually reach.
+   *
+   * Run with `npm run typecheck:test`. Not part of `npm run build`: a broken test should fail a
+   * test run, not a deployment of code that is fine.
+   */
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    /* `vite/client` as well as `node`, because queue.test.mts reads `import.meta.env`. */
+    "types": ["node", "vite/client"]
+  },
+  "include": ["src/**/*.test.mts"],
+  /*
+   * Overrides the base config's exclude, which is exactly this pattern.
+   *
+   * `extends` inherits `exclude` as well as everything else, so without this the include and the
+   * inherited exclude cancel out and tsc reports "no inputs were found" — a config that typechecks
+   * nothing while appearing to pass.
+   */
+  "exclude": []
+}

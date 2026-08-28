@@ -16,6 +16,7 @@ import {
   ChevronRight,
   Loader2,
   LogOut,
+  Phone,
   Plus,
   Printer,
   RefreshCw,
@@ -181,8 +182,25 @@ export function SessionList({
         {scans.map((scan) => (
           <div key={scan.scanId} className="card flex items-center gap-3 p-3">
             <button onClick={() => onOpen(scan.scanId)} className="min-w-0 flex-1 text-left">
-              <p className="flex items-center gap-2">
+              <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
                 <span className="font-mono text-[17px] font-bold tracking-wide text-brand-400">{scan.scanId}</span>
+                {/*
+                    The customer, when the scan has one.
+
+                    Beside the scan ID rather than down in the label line: at the counter this is
+                    the thing being looked for, and burying it under the name would make the biller
+                    read every row.
+
+                    Absent from every response until the backend carries the field — see
+                    CUSTOMER-MOBILE-BACKEND.md — at which point rows start showing it with no change
+                    here.
+                */}
+                {scan.customerMobile && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5 font-mono text-[12px] font-bold text-white/80">
+                    <Phone className="h-3 w-3 shrink-0 text-white/45" />
+                    {scan.customerMobile}
+                  </span>
+                )}
                 {scan.status === 'ready' && (
                   <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-bold text-emerald-400">
                     Ready
